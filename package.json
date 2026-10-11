@@ -4,7 +4,7 @@
   "description": "",
   "main": "dist/src/main.js",
   "scripts": {
-    "dev": "tsx --watch src/main.ts",
+    "dev": "tsx --watch src/main.ts & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT INT TERM; vite web",
     "build": "tsc && tsc -p web --noEmit && vite build web"
   },
   "license": "ISC",
