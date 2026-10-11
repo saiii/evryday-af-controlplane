@@ -1,5 +1,6 @@
 DOCKER := podman
-VERSION := 0.0.1
+VERSION := 0.1.0
+.PHONY: login build test publish
 
 login:
 	aws ecr get-login-password --region ap-southeast-1 | $(DOCKER) login --username AWS --password-stdin 126888715538.dkr.ecr.ap-southeast-1.amazonaws.com
@@ -12,7 +13,7 @@ build:
 	$(DOCKER) tag edaymastery.com/evryday-af-controlplane:latest 126888715538.dkr.ecr.ap-southeast-1.amazonaws.com/edaymastery.com/evryday-af-controlplane:$(VERSION)
 
 test:
-	$(DOCKER) run -it -p 3000:3000 --rm edaymastery.com/evryday-af-controlplane
+	$(DOCKER) run -it -p 127.0.0.1:3000:3000 --rm edaymastery.com/evryday-af-controlplane
 
 publish:
 	$(DOCKER) push 126888715538.dkr.ecr.ap-southeast-1.amazonaws.com/edaymastery.com/evryday-af-controlplane:$(VERSION)
