@@ -1,0 +1,4 @@
+node_modules
+dist
+image.tar
+trivy.out

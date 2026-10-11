@@ -1,0 +1,21 @@
+{
+  "name": "evryday-af-controlplane",
+  "version": "0.0.1",
+  "description": "",
+  "main": "dist/src/main.js",
+  "scripts": {
+    "dev": "tsx --watch src/main.ts",
+    "build": "tsc"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "^22.0.6",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
