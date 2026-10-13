@@ -1,6 +1,6 @@
 # evryday-af-controlplane
 
-Serves the Agent Flow Designer placeholder page at `/` and answers `GET /hello`, on port 3000.
+Serves the Agent Flow Designer at `/` (a palette of the six service types and a canvas for laying out named components; the canvas is in memory only, nothing is saved yet) and answers `GET /hello`, on port 3000.
 
 ## Commands
 
