@@ -44,3 +44,58 @@ body {
     color: #6b7280;
     font-size: 13px;
 }
+
+.palette {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.palette-entry {
+    padding: 8px 12px;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-left-width: 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: grab;
+    user-select: none;
+}
+
+.component-node {
+    position: relative;
+    box-sizing: border-box;
+    width: 180px;
+    height: 60px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-left-width: 6px;
+    border-radius: 4px;
+}
+
+.component-node-selected {
+    box-shadow: 0 0 0 2px #6b7280;
+}
+
+.component-node-label {
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.component-node-name {
+    font-size: 12px;
+    color: #6b7280;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
