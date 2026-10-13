@@ -1,24 +1,69 @@
+import { useEffect, useMemo, useState } from 'react'
 import type { DragEvent } from 'react'
-import { Background, BackgroundVariant, Controls, ReactFlow, useNodesState, useReactFlow } from '@xyflow/react'
-import type { NodeTypes } from '@xyflow/react'
-import { GRID_SIZE, nextDefaultName, snapPosition } from '../../../src/shared/af-document'
-import { isComponentType } from '../../../src/shared/catalogue'
-import { componentNode, newNodeId } from '../af-mapping'
-import type { ComponentFlowNode } from '../af-mapping'
+import {
+    Background,
+    BackgroundVariant,
+    ConnectionLineType,
+    ConnectionMode,
+    Controls,
+    MarkerType,
+    ReactFlow,
+    useEdgesState,
+    useNodesState,
+    useReactFlow
+} from '@xyflow/react'
+import type { EdgeTypes, IsValidConnection, NodeTypes, OnConnectEnd, OnConnectStart } from '@xyflow/react'
+import { GRID_SIZE, lineProblem, nextDefaultName, snapPosition } from '../../../src/shared/af-document'
+import type { LineEnd } from '../../../src/shared/af-document'
+import { isComponentType, ruleRefusal } from '../../../src/shared/catalogue'
+import { nearestSide } from '../../../src/shared/line-path'
+import { componentNode, connectionsFromEdges, lineEdge, newNodeId } from '../af-mapping'
+import type { ComponentFlowNode, LineFlowEdge } from '../af-mapping'
 import ComponentNode from './ComponentNode'
+import LineEdge from './LineEdge'
 import { PALETTE_DRAG_TYPE } from './Palette'
 
 // Declared once, outside the component: the library remounts every node if
 // this object changes between renders.
 const nodeTypes: NodeTypes = { component: ComponentNode }
+// The same holds for lines. The key equals the type set in lineEdge.
+const edgeTypes: EdgeTypes = { line: LineEdge }
 
 // The size of a component, matching .component-node in styles.css.
 const NODE_WIDTH = 180
 const NODE_HEIGHT = 60
 
+// How long a refusal message stays before it goes away by itself.
+const MESSAGE_MS = 5000
+
+// The arrowhead colours. They match --xy-edge-stroke and
+// --xy-edge-stroke-selected in styles.css.
+const LINE_GREY = '#9ca3af'
+const LINE_SELECTED = '#374151'
+
 export default function Canvas() {
     const [nodes, setNodes, onNodesChange] = useNodesState<ComponentFlowNode>([])
-    const { screenToFlowPosition } = useReactFlow()
+    const [edges, setEdges, onEdgesChange] = useEdgesState<LineFlowEdge>([])
+    const { screenToFlowPosition, getNode, getNodes, getEdges, getInternalNode } = useReactFlow<
+        ComponentFlowNode,
+        LineFlowEdge
+    >()
+
+    // refusal is null when no message is showing. It holds the sentence as plain text.
+    const [refusal, setRefusal] = useState<string | null>(null)
+
+    // The message goes away by itself. A second refusal replaces the first and
+    // starts its own timer; a drag start clears the message first, so the same
+    // sentence shown again also gets a fresh 5 seconds.
+    useEffect(() => {
+        if (refusal === null) {
+            return
+        }
+        const timer = window.setTimeout(() => setRefusal(null), MESSAGE_MS)
+        return () => {
+            window.clearTimeout(timer)
+        }
+    }, [refusal])
 
     const onDragOver = (event: DragEvent<HTMLDivElement>) => {
         event.preventDefault()
@@ -46,19 +91,134 @@ export default function Canvas() {
         ])
     }
 
+    // One end of a line as the rules see it, or null when no component has that id.
+    const endOf = (id: string): LineEnd | null => {
+        const node = getNode(id)
+        if (node === undefined) {
+            return null
+        }
+        return { name: node.data.name, type: node.data.componentType }
+    }
+
+    // The two ends and the verdict on a line between them, read at the moment
+    // of the check. Null when either component is missing.
+    const problemBetween = (sourceId: string, targetId: string) => {
+        const from = endOf(sourceId)
+        const to = endOf(targetId)
+        if (from === null || to === null) {
+            return null
+        }
+        return { from, to, problem: lineProblem(from, to, connectionsFromEdges(getNodes(), getEdges())) }
+    }
+
+    // The library asks this only when the pointer is exactly on a dot. It keeps
+    // the library's own state truthful and makes nothing.
+    const isValidConnection: IsValidConnection<LineFlowEdge> = (connection) => {
+        const judged = problemBetween(connection.source, connection.target)
+        return judged !== null && judged.problem === null
+    }
+
+    // Starting another drag clears the message.
+    const onConnectStart: OnConnectStart = () => {
+        setRefusal(null)
+    }
+
+    // The one place a line is made. It runs on every release after a drag from a dot.
+    const onConnectEnd: OnConnectEnd = (event, state) => {
+        if (state.fromNode === null || state.fromHandle === null) {
+            return
+        }
+        // A touch release has no clientX of its own.
+        const pointer = 'changedTouches' in event ? event.changedTouches[0] : event
+        // The component under the pointer is found in the page. The library's own
+        // idea of the target is empty unless the release is exactly on a dot.
+        const under = document.elementFromPoint(pointer.clientX, pointer.clientY)
+        const targetId: string | null = under?.closest('.react-flow__node')?.getAttribute('data-id') ?? null
+        // Empty canvas: no line and no message. This is how a drag is cancelled.
+        if (targetId === null) {
+            return
+        }
+        const sourceId: string = state.fromNode.id
+        // Silent cancel on the source: decided by the user at planning time (D-08), to be confirmed at the Phase 4 browser check.
+        if (targetId === sourceId) {
+            return
+        }
+        const judged = problemBetween(sourceId, targetId)
+        if (judged === null) {
+            return
+        }
+        if (judged.problem === 'rule') {
+            setRefusal(ruleRefusal(judged.from.type, judged.to.type))
+            return
+        }
+        if (judged.problem === 'duplicate') {
+            setRefusal(`${judged.from.name} already sends to ${judged.to.name}.`)
+            return
+        }
+        const target = getInternalNode(targetId)
+        if (target === undefined) {
+            return
+        }
+        // The target end goes on the side nearest to the release point, in canvas coordinates.
+        const point = screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY }, { snapToGrid: false })
+        const side = nearestSide(point, {
+            x: target.internals.positionAbsolute.x,
+            y: target.internals.positionAbsolute.y,
+            width: target.measured.width ?? NODE_WIDTH,
+            height: target.measured.height ?? NODE_HEIGHT
+        })
+        // The line is built here, not in the updater, which only adds it once:
+        // StrictMode runs updaters twice in dev.
+        const edge = lineEdge(sourceId, state.fromHandle.id ?? 'right', targetId, side)
+        setEdges((current) => (current.some((e) => e.id === edge.id) ? current : [...current, edge]))
+    }
+
+    // An arrowhead's colour is fixed in the marker and does not follow the
+    // line, so a selected line gets its own, darker one.
+    const shownEdges = useMemo(
+        () =>
+            edges.map((edge) => ({
+                ...edge,
+                markerEnd: {
+                    type: MarkerType.ArrowClosed,
+                    color: edge.selected ? LINE_SELECTED : LINE_GREY,
+                    width: 16,
+                    height: 16
+                }
+            })),
+        [edges]
+    )
+
     return (
         <div className="canvas">
+            {refusal !== null && (
+                <div className="canvas-message" role="alert">
+                    <span className="canvas-message-mark" aria-hidden="true">
+                        ✕
+                    </span>
+                    {refusal}
+                </div>
+            )}
             <ReactFlow
                 nodes={nodes}
+                edges={shownEdges}
                 onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 onDrop={onDrop}
                 onDragOver={onDragOver}
                 snapToGrid
                 snapGrid={[GRID_SIZE, GRID_SIZE]}
+                connectionMode={ConnectionMode.Loose}
+                connectOnClick={false}
+                connectionRadius={0}
+                connectionLineType={ConnectionLineType.SmoothStep}
+                isValidConnection={isValidConnection}
+                onConnectStart={onConnectStart}
+                onConnectEnd={onConnectEnd}
                 deleteKeyCode={null}
                 zoomOnDoubleClick={false}
-                nodesConnectable={false}
                 minZoom={0.2}
                 maxZoom={2}
             >
