@@ -1,16 +1,38 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { useReactFlow } from '@xyflow/react'
+import { Handle, Position, useReactFlow, useStore } from '@xyflow/react'
 import type { NodeProps } from '@xyflow/react'
-import { nameProblem } from '../../../src/shared/af-document'
+import { lineProblem, nameProblem } from '../../../src/shared/af-document'
 import { CATALOGUE } from '../../../src/shared/catalogue'
-import type { ComponentFlowNode } from '../af-mapping'
+import { connectionsFromEdges } from '../af-mapping'
+import type { ComponentFlowNode, LineFlowEdge } from '../af-mapping'
 
 const RULE_MESSAGE = 'Use lowercase letters, digits and hyphens, starting with a letter, 63 characters at most'
 
 export default function ComponentNode({ id, data, selected }: NodeProps<ComponentFlowNode>) {
     const entry = CATALOGUE[data.componentType]
-    const { getNodes, updateNodeData } = useReactFlow<ComponentFlowNode>()
+    const { getNodes, getEdges, updateNodeData } = useReactFlow<ComponentFlowNode, LineFlowEdge>()
+
+    // True while a line is being dragged that may not end on this component.
+    // It is read from the library's store at render time and never stored.
+    const dimmed: boolean = useStore((s) => {
+        const from = s.connection.fromNode
+        if (!s.connection.inProgress || from === null) {
+            return false
+        }
+        // Source not dimmed: decided by the user at planning time (D-08), to be confirmed at the Phase 4 browser check.
+        if (from.id === id) {
+            return false
+        }
+        const source = from.data as ComponentFlowNode['data']
+        return (
+            lineProblem(
+                { name: source.name, type: source.componentType },
+                { name: data.name, type: data.componentType },
+                connectionsFromEdges(getNodes(), getEdges())
+            ) !== null
+        )
+    })
 
     // draft is null when the name is not being edited. It holds the text exactly as typed.
     const [draft, setDraft] = useState<string | null>(null)
@@ -92,11 +114,21 @@ export default function ComponentNode({ id, data, selected }: NodeProps<Componen
         }
     }
 
+    // Selected and dimmed are independent, so the class is built from both.
+    let className: string = 'component-node'
+    if (selected) {
+        className += ' component-node-selected'
+    }
+    if (dimmed) {
+        className += ' component-node-dimmed'
+    }
+
     return (
-        <div
-            className={selected ? 'component-node component-node-selected' : 'component-node'}
-            style={{ borderLeftColor: entry.colour }}
-        >
+        <div className={className} style={{ borderLeftColor: entry.colour }}>
+            <Handle type="source" id="top" position={Position.Top} />
+            <Handle type="source" id="right" position={Position.Right} />
+            <Handle type="source" id="bottom" position={Position.Bottom} />
+            <Handle type="source" id="left" position={Position.Left} />
             <div className="component-node-label">{entry.label}</div>
             {draft === null ? (
                 <div className="component-node-name" title={data.name} onDoubleClick={startEdit}>
@@ -122,7 +154,13 @@ export default function ComponentNode({ id, data, selected }: NodeProps<Componen
                         setMessage(null)
                     }}
                     onKeyDown={onKeyDown}
-                    onBlur={finishAway}
+                    onBlur={() => {
+                        // The window lost focus, not the field: keep the edit open.
+                        if (!document.hasFocus()) {
+                            return
+                        }
+                        finishAway()
+                    }}
                 />
             )}
             {message !== null && <div className="component-node-error">{message}</div>}

@@ -144,3 +144,18 @@ body {
 .react-flow__edge.selected .react-flow__edge-path {
     stroke-width: 3;
 }
+
+.component-node-dimmed {
+    opacity: 0.35;
+}
+
+.react-flow .react-flow__handle {
+    width: 10px;
+    height: 10px;
+    background: #ffffff;
+    border: 2px solid #6b7280;
+}
+
+.react-flow .react-flow__handle-left {
+    left: -6px;
+}
