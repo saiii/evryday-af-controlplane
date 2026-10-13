@@ -36,13 +36,14 @@ body {
 
 .shell-canvas {
     background: #ffffff;
-    padding: 12px;
+    position: relative;
+    min-width: 0;
+    min-height: 0;
 }
 
-.shell-placeholder {
-    margin: 0;
-    color: #6b7280;
-    font-size: 13px;
+.canvas {
+    position: absolute;
+    inset: 0;
 }
 
 .palette {
