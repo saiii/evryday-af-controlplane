@@ -2,6 +2,7 @@
 // Shared by the server build and the page bundle, so the only import is the
 // type table next to this file. Nothing here knows about the canvas library.
 
+import { canSend } from './catalogue'
 import type { ComponentType } from './catalogue'
 
 export const SCHEMA_VERSION = 1
@@ -64,4 +65,24 @@ export function snapPosition(position: AfPosition): AfPosition {
         x: Math.round(position.x / GRID_SIZE) * GRID_SIZE + 0,
         y: Math.round(position.y / GRID_SIZE) * GRID_SIZE + 0
     }
+}
+
+export interface LineEnd {
+    name: string
+    type: ComponentType
+}
+
+export type LineProblem = 'rule' | 'duplicate'
+
+// Judges a line from one component to another against the rule table and the
+// lines that already exist. The rule is checked first, so a line the rules
+// forbid always gets the rule verdict, even when the same line is already there.
+export function lineProblem(from: LineEnd, to: LineEnd, connections: readonly AfConnection[]): LineProblem | null {
+    if (!canSend(from.type, to.type)) {
+        return 'rule'
+    }
+    if (connections.some((c) => c.from === from.name && c.to === to.name)) {
+        return 'duplicate'
+    }
+    return null
 }
