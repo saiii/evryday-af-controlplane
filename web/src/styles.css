@@ -133,3 +133,14 @@ body {
     border-radius: 3px;
     white-space: nowrap;
 }
+
+.react-flow {
+    --xy-edge-stroke: #9ca3af;
+    --xy-edge-stroke-width: 1.5;
+    --xy-edge-stroke-selected: #374151;
+    --xy-connectionline-stroke: #9ca3af;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+    stroke-width: 3;
+}
