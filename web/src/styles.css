@@ -176,3 +176,36 @@ body {
 .canvas-message-mark {
     margin-right: 8px;
 }
+
+.confirm-dialog {
+    padding: 16px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 14px;
+    color: #111827;
+    background: #ffffff;
+}
+
+.confirm-dialog p {
+    margin: 0 0 16px;
+}
+
+.confirm-dialog::backdrop {
+    background: rgba(17, 24, 39, 0.2);
+}
+
+.confirm-dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.confirm-dialog-buttons button {
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 13px;
+    color: #111827;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+}

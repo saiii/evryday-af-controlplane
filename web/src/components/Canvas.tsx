@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import {
     Background,
@@ -12,7 +12,14 @@ import {
     useNodesState,
     useReactFlow
 } from '@xyflow/react'
-import type { EdgeTypes, IsValidConnection, NodeTypes, OnConnectEnd, OnConnectStart } from '@xyflow/react'
+import type {
+    EdgeTypes,
+    IsValidConnection,
+    NodeTypes,
+    OnBeforeDelete,
+    OnConnectEnd,
+    OnConnectStart
+} from '@xyflow/react'
 import { GRID_SIZE, lineProblem, nextDefaultName, snapPosition } from '../../../src/shared/af-document'
 import type { LineEnd } from '../../../src/shared/af-document'
 import { isComponentType, ruleRefusal } from '../../../src/shared/catalogue'
@@ -41,6 +48,13 @@ const MESSAGE_MS = 5000
 const LINE_GREY = '#9ca3af'
 const LINE_SELECTED = '#374151'
 
+// The question asked before a component is deleted together with lines.
+// answer settles the delete that is waiting: true deletes, false keeps everything.
+interface Question {
+    text: string
+    answer: (confirmed: boolean) => void
+}
+
 export default function Canvas() {
     const [nodes, setNodes, onNodesChange] = useNodesState<ComponentFlowNode>([])
     const [edges, setEdges, onEdgesChange] = useEdgesState<LineFlowEdge>([])
@@ -64,6 +78,24 @@ export default function Canvas() {
             window.clearTimeout(timer)
         }
     }, [refusal])
+
+    // question is null when nothing is being asked.
+    const [question, setQuestion] = useState<Question | null>(null)
+    const dialogRef = useRef<HTMLDialogElement>(null)
+    const deleteRef = useRef<HTMLButtonElement>(null)
+
+    // The dialog opens when a question arrives. The test for "already open"
+    // keeps a repeated run of this effect from throwing. Focus is put on the
+    // Delete button by hand, so that Enter deletes: the browser would
+    // otherwise focus the first button, which is Cancel.
+    useEffect(() => {
+        const dialog = dialogRef.current
+        if (question === null || dialog === null || dialog.open) {
+            return
+        }
+        dialog.showModal()
+        deleteRef.current?.focus()
+    }, [question])
 
     const onDragOver = (event: DragEvent<HTMLDivElement>) => {
         event.preventDefault()
@@ -173,6 +205,51 @@ export default function Canvas() {
         setEdges((current) => (current.some((e) => e.id === edge.id) ? current : [...current, edge]))
     }
 
+    // The library asks this before every delete, with the selected components
+    // and with the selected lines plus every line attached to one of those
+    // components, each line once. A question is put only when a component
+    // takes lines with it.
+    const onBeforeDelete: OnBeforeDelete<ComponentFlowNode, LineFlowEdge> = async ({
+        nodes: goingNodes,
+        edges: goingEdges
+    }) => {
+        // A second delete while the question is showing does nothing.
+        if (dialogRef.current?.open) {
+            return false
+        }
+        const ids: Set<string> = new Set(goingNodes.map((n) => n.id))
+        // Lines only, or components with no lines: deleted at once.
+        if (!goingEdges.some((e) => ids.has(e.source) || ids.has(e.target))) {
+            return true
+        }
+        const lines: string = goingEdges.length === 1 ? '1 line' : `${goingEdges.length} lines`
+        let text: string
+        if (goingNodes.length > 1) {
+            text = `Delete ${goingNodes.length} components and ${lines}?`
+        } else {
+            const only = goingNodes[0]
+            // "its" is true only when every line that goes is attached to the
+            // one component. A line selected alongside it that belongs to two
+            // other components is asked about by count.
+            if (goingEdges.every((e) => e.source === only.id || e.target === only.id)) {
+                text = `Delete ${only.data.name} and its ${lines}?`
+            } else {
+                text = `Delete 1 component and ${lines}?`
+            }
+        }
+        return new Promise<boolean>((resolve) => {
+            setQuestion({ text, answer: resolve })
+        })
+    }
+
+    // Closes the dialog and settles the waiting delete. On true the library
+    // removes the components and their lines through onNodesChange and onEdgesChange.
+    const answer = (confirmed: boolean) => {
+        dialogRef.current?.close()
+        question?.answer(confirmed)
+        setQuestion(null)
+    }
+
     // An arrowhead's colour is fixed in the marker and does not follow the
     // line, so a selected line gets its own, darker one.
     const shownEdges = useMemo(
@@ -217,7 +294,9 @@ export default function Canvas() {
                 isValidConnection={isValidConnection}
                 onConnectStart={onConnectStart}
                 onConnectEnd={onConnectEnd}
-                deleteKeyCode={null}
+                deleteKeyCode={['Backspace', 'Delete']}
+                multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
+                onBeforeDelete={onBeforeDelete}
                 zoomOnDoubleClick={false}
                 minZoom={0.2}
                 maxZoom={2}
@@ -225,6 +304,33 @@ export default function Canvas() {
                 <Background variant={BackgroundVariant.Dots} gap={GRID_SIZE} size={1} color="#d1d5db" />
                 <Controls showInteractive={false} fitViewOptions={{ maxZoom: 1, padding: 0.2 }} />
             </ReactFlow>
+            <dialog
+                ref={dialogRef}
+                className="confirm-dialog"
+                onCancel={(event) => {
+                    // Esc: the dialog is closed by answer, with the delete refused.
+                    event.preventDefault()
+                    answer(false)
+                }}
+                onKeyDown={(event) => {
+                    // No key pressed in the dialog reaches the canvas's own key handling.
+                    event.stopPropagation()
+                }}
+            >
+                {question !== null && (
+                    <>
+                        <p>{question.text}</p>
+                        <div className="confirm-dialog-buttons">
+                            <button type="button" onClick={() => answer(false)}>
+                                Cancel
+                            </button>
+                            <button type="button" ref={deleteRef} onClick={() => answer(true)}>
+                                Delete
+                            </button>
+                        </div>
+                    </>
+                )}
+            </dialog>
         </div>
     )
 }
