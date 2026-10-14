@@ -1,5 +1,6 @@
 import { ReactFlowProvider } from '@xyflow/react'
 import Canvas from './components/Canvas'
+import FileBar from './components/FileBar'
 import Palette from './components/Palette'
 import { useMessageBar } from './message'
 
@@ -9,7 +10,10 @@ export default function App() {
     return (
         <ReactFlowProvider>
             <div className="shell">
-                <header className="shell-header">Agent Flow Designer</header>
+                <header className="shell-header">
+                    <span className="shell-title">Agent Flow Designer</span>
+                    <FileBar showMessage={showMessage} />
+                </header>
                 <aside className="shell-palette">
                     <Palette />
                 </aside>
