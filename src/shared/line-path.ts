@@ -33,6 +33,21 @@ export function nearestSide(point: Point, box: Box): Side {
     return best[0]
 }
 
+// The two sides that face each other for a line between two boxes of the same
+// size, given their top-left positions. It compares the gaps between the boxes,
+// not the centre distances, so two boxes that overlap on one axis do not get a
+// line that doubles back. Ties go horizontal; the same position gives bottom to top.
+export function facingSides(from: Point, to: Point, size: { width: number; height: number }): { source: Side; target: Side } {
+    const dx: number = to.x - from.x
+    const dy: number = to.y - from.y
+    const gapX: number = Math.abs(dx) - size.width
+    const gapY: number = Math.abs(dy) - size.height
+    if (gapX >= gapY) {
+        return dx >= 0 ? { source: 'right', target: 'left' } : { source: 'left', target: 'right' }
+    }
+    return dy >= 0 ? { source: 'bottom', target: 'top' } : { source: 'top', target: 'bottom' }
+}
+
 // The corner points of a path made of M, L and Q commands, as the canvas
 // library gives for a step path with corner radius 0. Repeated points and
 // points in the middle of a straight run are dropped; the two ends are kept.
