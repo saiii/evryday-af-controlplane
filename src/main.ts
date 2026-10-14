@@ -1,17 +1,29 @@
 import express, { Application, Request, Response } from 'express'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
 import path from 'path'
+import { apiErrors, apiNotFound, localOnly, systemsRouter } from './api/systems'
 
 const service: string = "evryday-af-controlplane"
 const publicDir: string = path.resolve(__dirname, '../public')
 const pageBuilt: boolean = existsSync(path.join(publicDir, 'index.html'))
 
 const port: string = process.env.PORT || "3000"
+const dataDir: string = path.resolve(process.env.AF_DATA_DIR || "data")
+
+try {
+    mkdirSync(dataDir, { recursive: true })
+    console.log(`Saving files in ${dataDir}`)
+} catch {
+    console.warn(`Cannot create the folder ${dataDir}; saving will fail until it exists`)
+}
+
 const app: Application = express()
 
 app.get('/hello', (req: Request, res: Response) => {
     res.json({ message: "hello", service: service })
 })
+
+app.use('/api', localOnly, systemsRouter(dataDir), apiNotFound, apiErrors)
 
 if (pageBuilt) {
     console.log(`Serving the designer page from ${publicDir}`)
