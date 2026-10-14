@@ -68,5 +68,14 @@ export function parseYaml(text: string): Parsed {
         }
         return { ok: false, problem: `it is not valid YAML (line ${at.line}, column ${at.col})` }
     }
-    return { ok: true, value: doc.toJS({ maxAliasCount: 100 }) }
+    // yaml throws from toJS when aliases expand past maxAliasCount (a guard
+    // against resource exhaustion). The throw becomes a refusal so this
+    // function keeps its promise and the open answers with a plain sentence.
+    let value: unknown
+    try {
+        value = doc.toJS({ maxAliasCount: 100 })
+    } catch {
+        return { ok: false, problem: 'it uses too many YAML aliases' }
+    }
+    return { ok: true, value }
 }
