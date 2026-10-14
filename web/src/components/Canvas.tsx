@@ -24,8 +24,9 @@ import { GRID_SIZE, lineProblem, nextDefaultName, snapPosition } from '../../../
 import type { LineEnd } from '../../../src/shared/af-document'
 import { isComponentType, ruleRefusal } from '../../../src/shared/catalogue'
 import { nearestSide } from '../../../src/shared/line-path'
-import { componentNode, connectionsFromEdges, lineEdge, newNodeId } from '../af-mapping'
+import { NODE_HEIGHT, NODE_WIDTH, componentNode, connectionsFromEdges, lineEdge, newNodeId } from '../af-mapping'
 import type { ComponentFlowNode, LineFlowEdge } from '../af-mapping'
+import type { BarMessage, ShowMessage } from '../message'
 import ComponentNode from './ComponentNode'
 import LineEdge from './LineEdge'
 import { PALETTE_DRAG_TYPE } from './Palette'
@@ -35,13 +36,6 @@ import { PALETTE_DRAG_TYPE } from './Palette'
 const nodeTypes: NodeTypes = { component: ComponentNode }
 // The same holds for lines. The key equals the type set in lineEdge.
 const edgeTypes: EdgeTypes = { line: LineEdge }
-
-// The size of a component, matching .component-node in styles.css.
-const NODE_WIDTH = 180
-const NODE_HEIGHT = 60
-
-// How long a refusal message stays before it goes away by itself.
-const MESSAGE_MS = 5000
 
 // The arrowhead colours. They match --xy-edge-stroke and
 // --xy-edge-stroke-selected in styles.css.
@@ -55,29 +49,21 @@ interface Question {
     answer: (confirmed: boolean) => void
 }
 
-export default function Canvas() {
+// The message bar lives in App, so the file bar in the header shows its
+// messages in the same place (D-19).
+interface CanvasProps {
+    message: BarMessage | null
+    showMessage: ShowMessage
+    clearMessage: () => void
+}
+
+export default function Canvas({ message, showMessage, clearMessage }: CanvasProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<ComponentFlowNode>([])
     const [edges, setEdges, onEdgesChange] = useEdgesState<LineFlowEdge>([])
     const { screenToFlowPosition, getNode, getNodes, getEdges, getInternalNode } = useReactFlow<
         ComponentFlowNode,
         LineFlowEdge
     >()
-
-    // refusal is null when no message is showing. It holds the sentence as plain text.
-    const [refusal, setRefusal] = useState<string | null>(null)
-
-    // The message goes away by itself. A second refusal replaces the first and
-    // starts its own timer; a drag start clears the message first, so the same
-    // sentence shown again also gets a fresh 5 seconds.
-    useEffect(() => {
-        if (refusal === null) {
-            return
-        }
-        const timer = window.setTimeout(() => setRefusal(null), MESSAGE_MS)
-        return () => {
-            window.clearTimeout(timer)
-        }
-    }, [refusal])
 
     // question is null when nothing is being asked.
     const [question, setQuestion] = useState<Question | null>(null)
@@ -152,7 +138,7 @@ export default function Canvas() {
 
     // Starting another drag clears the message.
     const onConnectStart: OnConnectStart = () => {
-        setRefusal(null)
+        clearMessage()
     }
 
     // The one place a line is made. It runs on every release after a drag from a dot.
@@ -180,11 +166,11 @@ export default function Canvas() {
             return
         }
         if (judged.problem === 'rule') {
-            setRefusal(ruleRefusal(judged.from.type, judged.to.type))
+            showMessage(ruleRefusal(judged.from.type, judged.to.type), 'error')
             return
         }
         if (judged.problem === 'duplicate') {
-            setRefusal(`${judged.from.name} already sends to ${judged.to.name}.`)
+            showMessage(`${judged.from.name} already sends to ${judged.to.name}.`, 'error')
             return
         }
         const target = getInternalNode(targetId)
@@ -268,12 +254,17 @@ export default function Canvas() {
 
     return (
         <div className="canvas">
-            {refusal !== null && (
-                <div className="canvas-message" role="alert">
+            {message !== null && message.kind === 'error' && (
+                <div key={message.key} className="canvas-message" role="alert">
                     <span className="canvas-message-mark" aria-hidden="true">
                         ✕
                     </span>
-                    {refusal}
+                    {message.text}
+                </div>
+            )}
+            {message !== null && message.kind === 'info' && (
+                <div key={message.key} className="canvas-message canvas-message-info" role="status">
+                    {message.text}
                 </div>
             )}
             <ReactFlow

@@ -1,8 +1,11 @@
 import { ReactFlowProvider } from '@xyflow/react'
 import Canvas from './components/Canvas'
 import Palette from './components/Palette'
+import { useMessageBar } from './message'
 
 export default function App() {
+    // One bar for every message: line refusals from the canvas and file messages.
+    const { message, showMessage, clearMessage } = useMessageBar()
     return (
         <ReactFlowProvider>
             <div className="shell">
@@ -11,7 +14,7 @@ export default function App() {
                     <Palette />
                 </aside>
                 <main className="shell-canvas">
-                    <Canvas />
+                    <Canvas message={message} showMessage={showMessage} clearMessage={clearMessage} />
                 </main>
             </div>
         </ReactFlowProvider>

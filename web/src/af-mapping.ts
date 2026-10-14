@@ -6,6 +6,11 @@ import type { Edge, Node } from '@xyflow/react'
 import { SCHEMA_VERSION } from '../../src/shared/af-document'
 import type { AfConnection, AfDocument, AfPosition } from '../../src/shared/af-document'
 import type { ComponentType } from '../../src/shared/catalogue'
+import { facingSides } from '../../src/shared/line-path'
+
+// The size of a component, matching .component-node in styles.css.
+export const NODE_WIDTH = 180
+export const NODE_HEIGHT = 60
 
 // componentType is the kebab id, never the label.
 export type ComponentNodeData = { name: string; componentType: ComponentType }
@@ -88,9 +93,37 @@ export function documentFromNodes(
     return doc
 }
 
-export function nodesFromDocument(doc: AfDocument): ComponentFlowNode[] {
-    return Object.keys(doc.components).map((name) => {
-        const position: AfPosition = doc.layout[name] ?? { x: 0, y: 0 }
-        return componentNode(newNodeId(), doc.components[name].type, name, position)
+// Only given a document the server has checked with checkDocument, so every
+// component has its own layout entry and no position is made up. Each name gets
+// a fresh internal id; idByName lets the lines find their ends.
+export function nodesFromDocument(doc: AfDocument): { nodes: ComponentFlowNode[]; idByName: Map<string, string> } {
+    const idByName: Map<string, string> = new Map()
+    const nodes: ComponentFlowNode[] = Object.keys(doc.components).map((name) => {
+        const id: string = newNodeId()
+        idByName.set(name, id)
+        return componentNode(id, doc.components[name].type, name, doc.layout[name])
     })
+    return { nodes, idByName }
+}
+
+// One line per connection, attached to the sides of its two components that
+// face each other (D-08, D-09). The sides are picked once, here, at open;
+// afterwards an opened line is like a drawn one and keeps its sides when
+// components move (D-10). The file never stores sides. A connection whose end
+// is not in idByName is left out.
+export function edgesFromDocument(doc: AfDocument, idByName: ReadonlyMap<string, string>): LineFlowEdge[] {
+    const edges: LineFlowEdge[] = []
+    for (const connection of doc.connections) {
+        const sourceId: string | undefined = idByName.get(connection.from)
+        const targetId: string | undefined = idByName.get(connection.to)
+        if (sourceId === undefined || targetId === undefined) {
+            continue
+        }
+        const sides = facingSides(doc.layout[connection.from], doc.layout[connection.to], {
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT
+        })
+        edges.push(lineEdge(sourceId, sides.source, targetId, sides.target))
+    }
+    return edges
 }
