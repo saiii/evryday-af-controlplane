@@ -3,3 +3,4 @@ dist
 .git
 image.tar
 trivy.out
+data

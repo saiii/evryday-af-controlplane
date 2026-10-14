@@ -13,7 +13,8 @@ build:
 	$(DOCKER) tag edaymastery.com/evryday-af-controlplane:latest 126888715538.dkr.ecr.ap-southeast-1.amazonaws.com/edaymastery.com/evryday-af-controlplane:$(VERSION)
 
 test:
-	$(DOCKER) run -it -p 127.0.0.1:3000:3000 --rm edaymastery.com/evryday-af-controlplane
+	mkdir -p data
+	$(DOCKER) run -it -p 127.0.0.1:3000:3000 -v $(CURDIR)/data:/data --rm edaymastery.com/evryday-af-controlplane
 
 publish:
 	$(DOCKER) push 126888715538.dkr.ecr.ap-southeast-1.amazonaws.com/edaymastery.com/evryday-af-controlplane:$(VERSION)

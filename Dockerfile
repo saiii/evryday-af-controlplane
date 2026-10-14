@@ -11,6 +11,8 @@ RUN npm run build
 
 FROM node:25-alpine AS runner
 WORKDIR /app
+ENV AF_DATA_DIR=/data
+RUN mkdir -p /data
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/dist ./dist
