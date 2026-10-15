@@ -14,8 +14,9 @@ const dataDir: string = path.resolve(process.env.AF_DATA_DIR || "data")
 try {
     mkdirSync(dataDir, { recursive: true })
     console.log(`Saving files in ${dataDir}`)
-} catch {
-    console.warn(`Cannot create the folder ${dataDir}; saving will fail until it exists`)
+} catch (error) {
+    // The error says why, such as EACCES or ENOTDIR.
+    console.warn(`Cannot create the folder ${dataDir}; saving will fail until it exists:`, error)
 }
 
 // Temp files from a save that crashed are removed once, at start.
