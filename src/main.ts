@@ -2,6 +2,7 @@ import express, { Application, Request, Response } from 'express'
 import { existsSync, mkdirSync } from 'fs'
 import path from 'path'
 import { apiErrors, apiNotFound, localOnly, systemsRouter } from './api/systems'
+import { removeStaleTemps } from './af/store'
 
 const service: string = "evryday-af-controlplane"
 const publicDir: string = path.resolve(__dirname, '../public')
@@ -16,6 +17,18 @@ try {
 } catch {
     console.warn(`Cannot create the folder ${dataDir}; saving will fail until it exists`)
 }
+
+// Temp files from a save that crashed are removed once, at start.
+removeStaleTemps(dataDir).then(
+    (removed: number) => {
+        if (removed > 0) {
+            console.log(`Removed ${removed} left-over temp ${removed === 1 ? 'file' : 'files'} from ${dataDir}`)
+        }
+    },
+    (error: unknown) => {
+        console.warn(`Cannot look for left-over temp files in ${dataDir}:`, error)
+    }
+)
 
 const app: Application = express()
 

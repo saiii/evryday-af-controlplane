@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { open, readdir, rename, rm } from 'node:fs/promises'
+import { lstat, open, readdir, rename, rm } from 'node:fs/promises'
 import type { Dirent, Stats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import path from 'node:path'
@@ -116,4 +116,53 @@ export async function writeAtomic(dir: string, name: string, text: string): Prom
         await rm(temp, { force: true })
         throw error
     }
+    await syncFolder(dir)
+}
+
+// Syncs the directory, so the rename survives a power loss. The file is
+// already in place by then, so a failed sync is logged and the save still
+// counts as done.
+async function syncFolder(dir: string): Promise<void> {
+    let handle: FileHandle | undefined
+    try {
+        handle = await open(path.resolve(dir), constants.O_RDONLY)
+        await handle.sync()
+    } catch (error) {
+        console.warn(`Cannot sync the folder ${path.resolve(dir)}:`, error)
+    } finally {
+        await handle?.close()
+    }
+}
+
+// A temp file left by writeAtomic: .<name>.af.<pid>.<uuid>.tmp
+const TEMP_PATTERN: RegExp = /^\.[a-z][a-z0-9-]{0,62}\.af\.\d+\.[0-9a-f-]{36}\.tmp$/
+
+// A temp file older than this is taken to be left over from a crash. A save
+// in progress takes far less, and another server may share the directory.
+const STALE_TEMP_MS: number = 60 * 60 * 1000
+
+// Removes the temp files a crashed save left behind, and returns how many
+// were removed. Only regular files that match TEMP_PATTERN and are older than
+// an hour are removed, so a save still in progress in another server that
+// shares the directory is left alone.
+export async function removeStaleTemps(dir: string): Promise<number> {
+    const entries: Dirent[] = await readdir(dir, { withFileTypes: true })
+    const now: number = Date.now()
+    let removed: number = 0
+    for (const entry of entries) {
+        if (!entry.isFile() || !TEMP_PATTERN.test(entry.name)) {
+            continue
+        }
+        const temp: string = path.join(path.resolve(dir), entry.name)
+        try {
+            const info: Stats = await lstat(temp)
+            if (info.isFile() && now - info.mtimeMs > STALE_TEMP_MS) {
+                await rm(temp, { force: true })
+                removed += 1
+            }
+        } catch (error) {
+            console.warn(`Cannot remove the temp file ${temp}:`, error)
+        }
+    }
+    return removed
 }
