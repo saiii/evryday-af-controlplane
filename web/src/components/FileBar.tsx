@@ -58,11 +58,22 @@ export default function FileBar({ showMessage }: FileBarProps) {
     // null while the list is being fetched.
     const [names, setNames] = useState<string[] | null>(null)
     const barRef = useRef<HTMLDivElement>(null)
+    // Each list fetch and each open takes the next number. An answer whose
+    // number is no longer current is ignored, so a late answer never replaces
+    // a newer one, and a list closed meanwhile shows nothing.
+    const listRequest = useRef<number>(0)
+    const openRequest = useRef<number>(0)
+
+    // Closes the list and drops any list answer still on its way.
+    const closeList = () => {
+        listRequest.current += 1
+        setListOpen(false)
+    }
 
     // Writes the canvas as <name>.af, over a file of the same name with no
     // question (D-03). A missing or bad name is refused here and nothing is sent.
     const save = async () => {
-        setListOpen(false)
+        closeList()
         if (name === '') {
             showMessage(`Cannot save without a name: ${FILE_NAME_RULE}.`, 'error')
             return
@@ -98,27 +109,39 @@ export default function FileBar({ showMessage }: FileBarProps) {
     // The list is read afresh every time it opens (D-06), in the server's order.
     const toggleList = async () => {
         if (listOpen) {
-            setListOpen(false)
+            closeList()
             return
         }
+        listRequest.current += 1
+        const request: number = listRequest.current
         setNames(null)
         setListOpen(true)
         let response: Response
         try {
             response = await fetch('/api/systems', { cache: 'no-store' })
         } catch {
-            setListOpen(false)
+            if (request !== listRequest.current) {
+                return
+            }
+            closeList()
             showMessage(UNREACHABLE, 'error')
             return
         }
         if (!response.ok) {
-            setListOpen(false)
-            showMessage(await errorFrom(response, 'Cannot list the saved files.'), 'error')
+            const error: string = await errorFrom(response, 'Cannot list the saved files.')
+            if (request !== listRequest.current) {
+                return
+            }
+            closeList()
+            showMessage(error, 'error')
             return
         }
         const listed: string[] | null = namesFrom(await bodyFrom(response))
+        if (request !== listRequest.current) {
+            return
+        }
         if (listed === null) {
-            setListOpen(false)
+            closeList()
             showMessage('Cannot list the saved files: the server answer cannot be read.', 'error')
             return
         }
@@ -128,24 +151,34 @@ export default function FileBar({ showMessage }: FileBarProps) {
     // Replaces the canvas with the file, with no question (D-07). A refused file
     // leaves the canvas and the name field as they were (D-18).
     const open = async (picked: string) => {
-        setListOpen(false)
+        closeList()
+        openRequest.current += 1
+        const request: number = openRequest.current
         let response: Response
         try {
             response = await fetch(`/api/systems/${encodeURIComponent(picked)}`, { cache: 'no-store' })
         } catch {
-            showMessage(UNREACHABLE, 'error')
+            if (request === openRequest.current) {
+                showMessage(UNREACHABLE, 'error')
+            }
             return
         }
         if (!response.ok) {
-            showMessage(
-                await errorFrom(response, `Cannot open ${picked}.af: the server answered ${response.status}.`),
-                'error'
+            const error: string = await errorFrom(
+                response,
+                `Cannot open ${picked}.af: the server answered ${response.status}.`
             )
+            if (request === openRequest.current) {
+                showMessage(error, 'error')
+            }
             return
         }
         // The answer is checked like a file on disk, so a malformed answer
         // leaves the canvas and the name field as they were.
         const body: unknown = await bodyFrom(response)
+        if (request !== openRequest.current) {
+            return
+        }
         const checked: CheckResult | null =
             typeof body === 'object' && body !== null && 'document' in body ? checkDocument(body.document) : null
         if (checked === null || 'problem' in checked) {
@@ -175,7 +208,7 @@ export default function FileBar({ showMessage }: FileBarProps) {
             if (bar !== null && event.target instanceof Node && bar.contains(event.target)) {
                 return
             }
-            setListOpen(false)
+            closeList()
         }
         document.addEventListener('pointerdown', onPointerDown, true)
         return () => {
@@ -188,7 +221,7 @@ export default function FileBar({ showMessage }: FileBarProps) {
     const onBarKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
         event.stopPropagation()
         if (event.key === 'Escape') {
-            setListOpen(false)
+            closeList()
         }
     }
 
@@ -198,7 +231,7 @@ export default function FileBar({ showMessage }: FileBarProps) {
         if (event.key === 'Enter') {
             void save()
         } else if (event.key === 'Escape') {
-            setListOpen(false)
+            closeList()
         }
     }
 
