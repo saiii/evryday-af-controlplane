@@ -63,14 +63,38 @@ export function parseYaml(text: string): Parsed {
         }
         return { ok: false, problem: `it is not valid YAML (line ${at.line}, column ${at.col})` }
     }
-    // yaml throws from toJS when aliases expand past maxAliasCount (a guard
-    // against resource exhaustion). The throw becomes a refusal so this
+    // yaml throws from toJS when aliases expand past MAX_ALIAS_COUNT (a guard
+    // against resource exhaustion). Every throw becomes a refusal so this
     // function keeps its promise and the open answers with a plain sentence.
+    // Only the alias-limit error is called too many aliases, and only an alias
+    // with no anchor before it is called that. Anything else is logged,
+    // because it points at a bug rather than at the file.
     let value: unknown
     try {
-        value = doc.toJS({ maxAliasCount: 100 })
-    } catch {
-        return { ok: false, problem: 'it uses too many YAML aliases' }
+        value = doc.toJS({ maxAliasCount: MAX_ALIAS_COUNT })
+    } catch (error) {
+        if (isYamlReferenceError(error, /^Excessive alias count/)) {
+            return { ok: false, problem: 'it uses too many YAML aliases' }
+        }
+        if (isYamlReferenceError(error, /^Unresolved alias/)) {
+            return { ok: false, problem: 'it uses a YAML alias whose anchor is not set before it' }
+        }
+        console.error('Cannot turn the parsed YAML into a value:', error)
+        return { ok: false, problem: 'it cannot be read as YAML' }
     }
     return { ok: true, value }
+}
+
+// How far aliases may expand, counted as yaml counts them. 500 lets 499
+// aliases of one shared anchor open (100 let only 99), and still refuses a
+// four-level alias bomb: ten aliases of ten aliases of ten aliases of a
+// ten-item list. The file size limit caps everything else.
+const MAX_ALIAS_COUNT: number = 500
+
+// True for a ReferenceError from yaml whose message matches. yaml 2.x throws
+// ReferenceError "Excessive alias count indicates a resource exhaustion
+// attack" past maxAliasCount, and "Unresolved alias (...)" for an alias whose
+// anchor comes later or not at all.
+function isYamlReferenceError(error: unknown, message: RegExp): boolean {
+    return error instanceof ReferenceError && message.test(error.message)
 }
