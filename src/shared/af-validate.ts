@@ -6,6 +6,7 @@
 import { NAME_PATTERN, SCHEMA_VERSION } from './af-document'
 import type { AfConnection, AfDocument, AfPosition } from './af-document'
 import { isComponentType } from './catalogue'
+import type { ComponentType } from './catalogue'
 
 // The rule for a file name, as it reads after "Cannot save <name>: ". It
 // starts in lower case and has no full stop, so the caller adds one.
@@ -166,16 +167,14 @@ export function checkDocument(value: unknown): CheckResult {
     }
 
     // Every name has passed NAME_PATTERN, so none of them is __proto__ and
-    // assigning into a fresh {} makes each one an own key.
+    // assigning into a fresh {} makes each one an own key. Every type has
+    // already passed isComponentType in the first loop over the names.
     const freshComponents: AfDocument['components'] = {}
     const freshLayout: Record<string, AfPosition> = {}
     for (const name of names) {
         const entry: Record<string, unknown> = components[name] as Record<string, unknown>
         const position: Record<string, unknown> = layout[name] as Record<string, unknown>
-        if (!isComponentType(entry.type)) {
-            return { problem: `component ${name} has no type` }
-        }
-        freshComponents[name] = { type: entry.type }
+        freshComponents[name] = { type: entry.type as ComponentType }
         // Adding 0 turns -0 into 0.
         freshLayout[name] = { x: (position.x as number) + 0, y: (position.y as number) + 0 }
     }
