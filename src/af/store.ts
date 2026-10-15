@@ -3,7 +3,8 @@
 // a null or a thrown error into an answer.
 
 import { randomUUID } from 'node:crypto'
-import { lstat, open, readdir, readFile, rename, rm } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open, readdir, rename, rm } from 'node:fs/promises'
 import type { Dirent, Stats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import path from 'node:path'
@@ -52,26 +53,48 @@ export async function listNames(dir: string): Promise<string[]> {
 }
 
 // The text of <name>.af, or null when there is no such regular file (missing,
-// a symlink or a directory). lstat does not follow a symlink, so a link can
-// never be opened. Throws FileTooLargeError above MAX_FILE_BYTES.
+// a symlink or a directory). The file is opened once with O_NOFOLLOW, and the
+// check and the read go through that one handle, so a file swapped for a link
+// after the check can never be read. Throws FileTooLargeError above
+// MAX_FILE_BYTES, also when the file grows after the size check.
 export async function readText(dir: string, name: string): Promise<string | null> {
     const file: string = fileFor(dir, name)
-    let info: Stats
+    let handle: FileHandle
     try {
-        info = await lstat(file)
+        handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        const code: string | undefined = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ELOOP' || code === 'EISDIR') {
             return null
         }
         throw error
     }
-    if (!info.isFile()) {
-        return null
+    try {
+        const info: Stats = await handle.stat()
+        if (!info.isFile()) {
+            return null
+        }
+        if (info.size > MAX_FILE_BYTES) {
+            throw new FileTooLargeError(file)
+        }
+        // Reads at most one byte more than the limit, so a file that grew
+        // after the stat is still refused.
+        const buffer: Buffer = Buffer.alloc(MAX_FILE_BYTES + 1)
+        let length: number = 0
+        while (length < buffer.length) {
+            const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+            if (bytesRead === 0) {
+                break
+            }
+            length += bytesRead
+        }
+        if (length > MAX_FILE_BYTES) {
+            throw new FileTooLargeError(file)
+        }
+        return buffer.toString('utf8', 0, length)
+    } finally {
+        await handle.close()
     }
-    if (info.size > MAX_FILE_BYTES) {
-        throw new FileTooLargeError(file)
-    }
-    return readFile(file, 'utf8')
 }
 
 // Writes <name>.af through a temp file in the same directory, then renames it
