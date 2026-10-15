@@ -48,6 +48,7 @@ A line from A to B means that A is allowed to send messages to B. Lines are perm
 
 - The server writes to the folder named by `AF_DATA_DIR` (default `./data`). The image sets it to `/data`.
 - `make test` creates `./data` in the repo and mounts it at `/data`, so saved files outlive the container. `npm run dev` uses `./data` too.
+- The server in the image runs as the `node` user (uid 1000), not root. Rootless podman maps that user to you, so `./data` works as is. Under rootful Docker, `./data` must be writable by uid 1000.
 - `data` is git-ignored and docker-ignored.
 - Only requests addressed to `localhost`, `127.0.0.1` or `[::1]` reach `/api`, and there is no login: this is for local use only.
 
