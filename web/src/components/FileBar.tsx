@@ -244,13 +244,15 @@ export default function FileBar({ showMessage }: FileBarProps) {
             items = <div className="file-bar-empty">No saved files</div>
         } else {
             items = names.map((n) => (
-                <button key={n} type="button" role="menuitem" onClick={() => void open(n)}>
+                <button key={n} type="button" onClick={() => void open(n)}>
                     {n}
                 </button>
             ))
         }
+        // A plain group of buttons, not a menu: a menu role promises arrow-key
+        // movement that this list does not have. Tab moves through the names.
         list = (
-            <div className="file-bar-list" role="menu">
+            <div className="file-bar-list" role="group" aria-label="Saved files">
                 {items}
             </div>
         )
@@ -273,7 +275,7 @@ export default function FileBar({ showMessage }: FileBarProps) {
             <button type="button" onClick={() => void save()}>
                 Save
             </button>
-            <button type="button" aria-haspopup="menu" aria-expanded={listOpen} onClick={() => void toggleList()}>
+            <button type="button" aria-expanded={listOpen} onClick={() => void toggleList()}>
                 Open ▾
             </button>
             {list}
