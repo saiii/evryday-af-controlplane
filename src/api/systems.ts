@@ -57,8 +57,8 @@ export function systemsRouter(dataDir: string): Router {
         try {
             names = await listNames(dataDir)
         } catch (error) {
-            console.error(error)
-            refuse(res, 500, `Cannot list the saved files: the folder ${dataDir} cannot be read.`)
+            console.error(`Cannot list ${dataDir}:`, error)
+            refuse(res, 500, 'Cannot list the saved files: the data folder cannot be read.')
             return
         }
         res.set('Cache-Control', 'no-store')
@@ -121,8 +121,8 @@ export function systemsRouter(dataDir: string): Router {
         try {
             await writeAtomic(dataDir, name, toYaml(checked.doc))
         } catch (error) {
-            console.error(error)
-            refuse(res, 500, `Cannot save ${name}.af: the folder ${dataDir} cannot be written.`)
+            console.error(`Cannot write ${name}.af in ${dataDir}:`, error)
+            refuse(res, 500, `Cannot save ${name}.af: the data folder cannot be written.`)
             return
         }
         res.json({ name })
