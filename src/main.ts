@@ -1,5 +1,6 @@
 import express, { Application, Request, Response } from 'express'
 import { existsSync, mkdirSync } from 'fs'
+import { Server } from 'http'
 import path from 'path'
 import { apiErrors, apiNotFound, localOnly, systemsRouter } from './api/systems'
 import { removeStaleTemps } from './af/store'
@@ -49,6 +50,28 @@ if (pageBuilt) {
     })
 }
 
-app.listen(parseInt(port), () => {
+const server: Server = app.listen(parseInt(port), () => {
     console.log(`Server ${service} is running on http://localhost:${port}`)
 })
+
+// Node is PID 1 in the container, so the kernel does not apply the default
+// action for SIGINT and SIGTERM; the process must handle them itself.
+let shuttingDown: boolean = false
+
+const shutdown = (signal: string): void => {
+    if (shuttingDown) {
+        return
+    }
+    shuttingDown = true
+    console.log(`Received ${signal}; shutting down`)
+    server.close(() => {
+        process.exit(0)
+    })
+    // Idle and keep-alive connections must not hold the server open.
+    server.closeAllConnections()
+    // A stuck connection still cannot hold the exit past 2 seconds.
+    setTimeout(() => process.exit(0), 2000).unref()
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('SIGTERM', () => shutdown('SIGTERM'))
