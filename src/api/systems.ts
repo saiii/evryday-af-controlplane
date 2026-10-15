@@ -9,7 +9,7 @@ import type { CheckResult } from '../shared/af-validate'
 import { NAME_PATTERN } from '../shared/af-document'
 import { parseYaml, toYaml } from '../af/codec'
 import type { Parsed } from '../af/codec'
-import { FileTooLargeError, listNames, readText, writeAtomic } from '../af/store'
+import { FileTooLargeError, listNames, MAX_FILE_BYTES, MAX_FILE_SIZE_TEXT, readText, writeAtomic } from '../af/store'
 
 const LOCAL_HOSTNAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]']
 
@@ -76,7 +76,7 @@ export function systemsRouter(dataDir: string): Router {
             text = await readText(dataDir, name)
         } catch (error) {
             if (error instanceof FileTooLargeError) {
-                refuse(res, 422, `Cannot open ${name}.af: the file is larger than 1 MB.`)
+                refuse(res, 422, `Cannot open ${name}.af: the file is larger than ${MAX_FILE_SIZE_TEXT}.`)
                 return
             }
             console.error(error)
@@ -101,7 +101,9 @@ export function systemsRouter(dataDir: string): Router {
         res.json({ name, document: checked.doc })
     })
 
-    router.put('/systems/:name', express.json({ limit: '100kb' }), async (req: Request, res: Response) => {
+    // The request may be as large as a file that can be opened, so a large
+    // hand-made file that opens can also be saved back.
+    router.put('/systems/:name', express.json({ limit: MAX_FILE_BYTES }), async (req: Request, res: Response) => {
         const name: string = String(req.params.name)
         if (!NAME_PATTERN.test(name)) {
             refuse(res, 400, `Cannot save ${shownName(name)}: ${FILE_NAME_RULE}.`)
@@ -118,8 +120,15 @@ export function systemsRouter(dataDir: string): Router {
             refuse(res, 422, `Cannot save ${name}.af: ${checked.problem}.`)
             return
         }
+        // A file larger than the open limit would be saved but could never be
+        // opened again, so it is refused before anything is written.
+        const text: string = toYaml(checked.doc)
+        if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) {
+            refuse(res, 422, `Cannot save ${name}.af: the file would be larger than ${MAX_FILE_SIZE_TEXT}.`)
+            return
+        }
         try {
-            await writeAtomic(dataDir, name, toYaml(checked.doc))
+            await writeAtomic(dataDir, name, text)
         } catch (error) {
             console.error(`Cannot write ${name}.af in ${dataDir}:`, error)
             refuse(res, 500, `Cannot save ${name}.af: the data folder cannot be written.`)
@@ -147,7 +156,7 @@ export function apiErrors(err: unknown, req: Request, res: Response, next: NextF
     const info: { type?: unknown; status?: unknown } =
         typeof err === 'object' && err !== null ? (err as { type?: unknown; status?: unknown }) : {}
     if (info.type === 'entity.too.large') {
-        refuse(res, 413, 'The canvas is too large to save.')
+        refuse(res, 413, `The canvas is too large to save: the request is larger than ${MAX_FILE_SIZE_TEXT}.`)
         return
     }
     if (info.type === 'entity.parse.failed') {

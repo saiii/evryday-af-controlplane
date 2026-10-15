@@ -10,8 +10,12 @@ import type { FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { byCodeUnit, NAME_PATTERN } from '../shared/af-document'
 
-// A file larger than this is refused on open before it is read.
+// A file larger than this is refused on open before it is read, and a save
+// that would write a larger file is refused, so every saved file opens again.
 export const MAX_FILE_BYTES: number = 1024 * 1024
+
+// MAX_FILE_BYTES as it reads in a sentence, such as "1 MB".
+export const MAX_FILE_SIZE_TEXT: string = `${MAX_FILE_BYTES / (1024 * 1024)} MB`
 
 export class FileTooLargeError extends Error {
     constructor(file: string) {
