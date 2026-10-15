@@ -4,13 +4,8 @@
 
 import { Document, isMap, isPair, parseDocument } from 'yaml'
 import type { YAMLError } from 'yaml'
+import { byCodeUnit } from '../shared/af-document'
 import type { AfDocument } from '../shared/af-document'
-
-// Code-unit order. Never localeCompare: ICU collation treats '-' specially
-// and can differ between the Mac and the Alpine image.
-function byCodeUnit(a: string, b: string): number {
-    return a < b ? -1 : a > b ? 1 : 0
-}
 
 // The standard form: keys in the order schemaVersion, components, connections,
 // layout; names sorted in code-unit order; lines sorted by from, then to; each

@@ -11,6 +11,14 @@ export const GRID_SIZE = 20
 
 export const NAME_PATTERN: RegExp = /^[a-z][a-z0-9-]{0,62}$/
 
+// Code-unit order, the one order for names and keys in a saved file. The
+// validator, the YAML writer and the file list all use it, so their orders
+// cannot drift apart (D-11). Never localeCompare: ICU collation treats '-'
+// specially and can differ between the Mac and the Alpine image.
+export function byCodeUnit(a: string, b: string): number {
+    return a < b ? -1 : a > b ? 1 : 0
+}
+
 export interface AfPosition {
     x: number
     y: number

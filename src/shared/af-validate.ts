@@ -3,7 +3,7 @@
 // the page bundle, so the only imports are the two files next to this one.
 // Nothing here knows about YAML, HTTP or the canvas library.
 
-import { NAME_PATTERN, SCHEMA_VERSION } from './af-document'
+import { byCodeUnit, NAME_PATTERN, SCHEMA_VERSION } from './af-document'
 import type { AfConnection, AfDocument, AfPosition } from './af-document'
 import { isComponentType } from './catalogue'
 import type { ComponentType } from './catalogue'
@@ -27,11 +27,6 @@ export function shownName(text: string): string {
 }
 
 export type CheckResult = { doc: AfDocument } | { problem: string }
-
-// Code-unit order. Never localeCompare: collation can differ between machines.
-function byCodeUnit(a: string, b: string): number {
-    return a < b ? -1 : a > b ? 1 : 0
-}
 
 // A plain mapping: an object that is not a list and whose prototype is
 // Object.prototype or null, so a byte array, a date or a Map is refused.

@@ -8,7 +8,7 @@ import { open, readdir, rename, rm } from 'node:fs/promises'
 import type { Dirent, Stats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import path from 'node:path'
-import { NAME_PATTERN } from '../shared/af-document'
+import { byCodeUnit, NAME_PATTERN } from '../shared/af-document'
 
 // A file larger than this is refused on open before it is read.
 export const MAX_FILE_BYTES: number = 1024 * 1024
@@ -18,11 +18,6 @@ export class FileTooLargeError extends Error {
         super(`${file} is larger than ${MAX_FILE_BYTES} bytes`)
         this.name = 'FileTooLargeError'
     }
-}
-
-// Code-unit order. Never localeCompare: collation can differ between machines.
-function byCodeUnit(a: string, b: string): number {
-    return a < b ? -1 : a > b ? 1 : 0
 }
 
 // The full path of <name>.af in the data directory. Throws for a name that is
