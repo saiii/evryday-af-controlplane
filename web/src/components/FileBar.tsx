@@ -7,7 +7,8 @@ import type { KeyboardEvent, ReactNode } from 'react'
 import { useReactFlow } from '@xyflow/react'
 import { NAME_PATTERN } from '../../../src/shared/af-document'
 import type { AfDocument } from '../../../src/shared/af-document'
-import { FILE_NAME_RULE, shownName } from '../../../src/shared/af-validate'
+import { checkDocument, FILE_NAME_RULE, shownName } from '../../../src/shared/af-validate'
+import type { CheckResult } from '../../../src/shared/af-validate'
 import { documentFromNodes, edgesFromDocument, nodesFromDocument } from '../af-mapping'
 import type { ComponentFlowNode, LineFlowEdge } from '../af-mapping'
 import type { ShowMessage } from '../message'
@@ -25,6 +26,24 @@ async function errorFrom(response: Response, fallback: string): Promise<string> 
         // Not JSON: the fallback is used.
     }
     return fallback
+}
+
+// The body of a successful answer, or undefined when it is not JSON.
+async function bodyFrom(response: Response): Promise<unknown> {
+    try {
+        return (await response.json()) as unknown
+    } catch {
+        return undefined
+    }
+}
+
+// The names in a list answer, or null when the answer is not { names: string[] }.
+function namesFrom(body: unknown): string[] | null {
+    if (typeof body !== 'object' || body === null || !('names' in body) || !Array.isArray(body.names)) {
+        return null
+    }
+    const names: unknown[] = body.names
+    return names.every((n) => typeof n === 'string') ? (names as string[]) : null
 }
 
 interface FileBarProps {
@@ -97,8 +116,13 @@ export default function FileBar({ showMessage }: FileBarProps) {
             showMessage(await errorFrom(response, 'Cannot list the saved files.'), 'error')
             return
         }
-        const body: { names: string[] } = await response.json()
-        setNames(body.names)
+        const listed: string[] | null = namesFrom(await bodyFrom(response))
+        if (listed === null) {
+            setListOpen(false)
+            showMessage('Cannot list the saved files: the server answer cannot be read.', 'error')
+            return
+        }
+        setNames(listed)
     }
 
     // Replaces the canvas with the file, with no question (D-07). A refused file
@@ -119,14 +143,22 @@ export default function FileBar({ showMessage }: FileBarProps) {
             )
             return
         }
-        const body: { name: string; document: AfDocument } = await response.json()
+        // The answer is checked like a file on disk, so a malformed answer
+        // leaves the canvas and the name field as they were.
+        const body: unknown = await bodyFrom(response)
+        const checked: CheckResult | null =
+            typeof body === 'object' && body !== null && 'document' in body ? checkDocument(body.document) : null
+        if (checked === null || 'problem' in checked) {
+            showMessage(`Cannot open ${picked}.af: the server answer cannot be read.`, 'error')
+            return
+        }
         // Built here, not in an updater: StrictMode runs updaters twice in dev.
-        const { nodes, idByName } = nodesFromDocument(body.document)
-        const edges: LineFlowEdge[] = edgesFromDocument(body.document, idByName)
+        const { nodes, idByName } = nodesFromDocument(checked.doc)
+        const edges: LineFlowEdge[] = edgesFromDocument(checked.doc, idByName)
         setNodes(nodes)
         setEdges(edges)
-        setName(body.name)
-        showMessage(`Opened ${body.name}.af`, 'info')
+        setName(picked)
+        showMessage(`Opened ${picked}.af`, 'info')
         // Zoom and pan are not in the file; the view is fitted instead (A6). The
         // library waits until the new components are measured before it fits.
         void fitView({ maxZoom: 1, padding: 0.2 })
