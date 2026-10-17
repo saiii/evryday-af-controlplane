@@ -2,21 +2,30 @@
 // plain value for the validator. This is the only file that imports yaml; the
 // server owns YAML and the page bundle never imports this file.
 
-import { Document, isMap, isPair, parseDocument } from 'yaml'
+import { Document, isMap, isPair, isScalar, parseDocument } from 'yaml'
 import type { YAMLError } from 'yaml'
-import { byCodeUnit } from '../shared/af-document'
+import { byCodeUnit, SCHEMA_VERSION } from '../shared/af-document'
 import type { AfDocument } from '../shared/af-document'
 
 // The standard form: keys in the order schemaVersion, components, connections,
 // layout; names sorted in code-unit order; lines sorted by from, then to; each
-// position inline. Only called with a document that passed checkDocument.
+// position inline; each component's keys in the order type, image, tag, with a
+// missing image or tag left out, and the tag always double-quoted. Only called with a document that passed checkDocument.
 // Every option is stated so the bytes do not move with a library default.
 export function toYaml(doc: AfDocument): string {
     const names: string[] = Object.keys(doc.components).sort(byCodeUnit)
-    const components: Record<string, { type: string }> = {}
+    const components: Record<string, { type: string; image?: string; tag?: string }> = {}
     const layout: Record<string, { x: number; y: number }> = {}
     for (const name of names) {
-        components[name] = { type: doc.components[name].type }
+        const c: AfDocument['components'][string] = doc.components[name]
+        const entry: { type: string; image?: string; tag?: string } = { type: c.type }
+        if (c.image !== undefined) {
+            entry.image = c.image
+        }
+        if (c.tag !== undefined) {
+            entry.tag = c.tag
+        }
+        components[name] = entry
         // Adding 0 turns -0 into 0.
         layout[name] = { x: doc.layout[name].x + 0, y: doc.layout[name].y + 0 }
     }
@@ -24,7 +33,7 @@ export function toYaml(doc: AfDocument): string {
         .map((c) => ({ from: c.from, to: c.to }))
         .sort((a, b) => byCodeUnit(a.from, b.from) || byCodeUnit(a.to, b.to))
     const yamlDoc: Document = new Document(
-        { schemaVersion: 1, components, connections, layout },
+        { schemaVersion: SCHEMA_VERSION, components, connections, layout },
         { version: '1.2', aliasDuplicateObjects: false }
     )
     const layoutNode: unknown = yamlDoc.get('layout', true)
@@ -33,6 +42,19 @@ export function toYaml(doc: AfDocument): string {
             if (isPair(pair) && isMap(pair.value)) {
                 // agent-1: { x: 400, y: 120 }
                 pair.value.flow = true
+            }
+        }
+    }
+    const componentsNode: unknown = yamlDoc.get('components', true)
+    if (isMap(componentsNode)) {
+        for (const pair of componentsNode.items) {
+            if (isPair(pair) && isMap(pair.value)) {
+                // A tag such as 1.0 or yes must stay text for every YAML
+                // reader, including YAML 1.1 tools (research Pitfall 3).
+                const tag: unknown = pair.value.get('tag', true)
+                if (isScalar(tag)) {
+                    tag.type = 'QUOTE_DOUBLE'
+                }
             }
         }
     }

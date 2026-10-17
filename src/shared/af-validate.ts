@@ -1,12 +1,13 @@
 // Checks a value that came from a file or a request and turns it into a
 // document the designer itself could have made. Shared by the server build and
-// the page bundle, so the only imports are the two files next to this one.
+// the page bundle, so the only imports are the files next to this one.
 // Nothing here knows about YAML, HTTP or the canvas library.
 
 import { byCodeUnit, NAME_PATTERN, SCHEMA_VERSION } from './af-document'
-import type { AfConnection, AfDocument, AfPosition } from './af-document'
+import type { AfComponent, AfConnection, AfDocument, AfPosition } from './af-document'
 import { isComponentType } from './catalogue'
 import type { ComponentType } from './catalogue'
+import { imageProblem, tagProblem } from './component-settings'
 
 // The rule for a file name, as it reads after "Cannot save <name>: ". It
 // starts in lower case and has no full stop, so the caller adds one.
@@ -17,6 +18,15 @@ const SHOWN_LENGTH: number = 40
 
 const TOP_LEVEL_KEYS: readonly string[] = ['schemaVersion', 'components', 'connections', 'layout']
 
+// The component keys each schemaVersion allows. The next version adds a row.
+const COMPONENT_KEYS: ReadonlyMap<number, readonly string[]> = new Map<number, readonly string[]>([
+    [1, ['type']],
+    [2, ['type', 'image', 'tag']]
+])
+
+// The keys a later version added, named in the problem for an older file.
+const V2_ONLY_KEYS: readonly string[] = ['image', 'tag']
+
 // A name or key that has not passed NAME_PATTERN, as it is shown in a problem
 // sentence: unchanged up to 40 characters, otherwise the first 40 and an ellipsis.
 export function shownName(text: string): string {
@@ -26,11 +36,13 @@ export function shownName(text: string): string {
     return `${text.slice(0, SHOWN_LENGTH)}…`
 }
 
-export type CheckResult = { doc: AfDocument } | { problem: string }
+// upgradedFrom is set when the input was an older version. The document is
+// always the current version; opening never rewrites the file, only Save does.
+export type CheckResult = { doc: AfDocument; upgradedFrom?: 1 } | { problem: string }
 
 // A plain mapping: an object that is not a list and whose prototype is
 // Object.prototype or null, so a byte array, a date or a Map is refused.
-function isMapping(v: unknown): v is Record<string, unknown> {
+export function isMapping(v: unknown): v is Record<string, unknown> {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) {
         return false
     }
@@ -70,8 +82,9 @@ function asText(v: unknown): string {
 // fresh document built only from checked fields, or the first problem found as
 // one lower-case sentence. Keys are checked in code-unit order, so the problem
 // reported does not depend on the order of keys in the file. The type rules
-// for lines are not checked here.
-export function checkDocument(value: unknown): CheckResult {
+// for lines are not checked here. versions lists the schemaVersion values
+// accepted: opening takes 1 or 2, a save takes only 2.
+export function checkDocument(value: unknown, versions: readonly number[] = [1, 2]): CheckResult {
     if (value === null || value === undefined) {
         return { problem: 'it is empty' }
     }
@@ -83,8 +96,12 @@ export function checkDocument(value: unknown): CheckResult {
             return { problem: `the key "${shownName(key)}" is not allowed at the top level` }
         }
     }
-    if (!Object.hasOwn(value, 'schemaVersion') || value.schemaVersion !== SCHEMA_VERSION) {
-        return { problem: 'schemaVersion must be 1' }
+    const version: unknown = Object.hasOwn(value, 'schemaVersion') ? value.schemaVersion : undefined
+    const allowedKeys: readonly string[] | undefined =
+        typeof version === 'number' && versions.includes(version) ? COMPONENT_KEYS.get(version) : undefined
+    if (allowedKeys === undefined) {
+        const onlyCurrent: boolean = versions.length === 1 && versions[0] === SCHEMA_VERSION
+        return { problem: onlyCurrent ? `schemaVersion must be ${SCHEMA_VERSION}` : 'schemaVersion must be 1 or 2' }
     }
     const components: unknown = Object.hasOwn(value, 'components') ? value.components : undefined
     if (!isMapping(components)) {
@@ -109,8 +126,9 @@ export function checkDocument(value: unknown): CheckResult {
             return { problem: `component ${name} must be a mapping with a type` }
         }
         for (const key of sortedKeys(entry)) {
-            if (key !== 'type') {
-                return { problem: `component ${name} has the key "${shownName(key)}", which is not allowed` }
+            if (!allowedKeys.includes(key)) {
+                const needs: string = version === 1 && V2_ONLY_KEYS.includes(key) ? ' (it needs schemaVersion 2)' : ''
+                return { problem: `component ${name} has the key "${shownName(key)}", which is not allowed${needs}` }
             }
         }
         if (!Object.hasOwn(entry, 'type')) {
@@ -118,6 +136,19 @@ export function checkDocument(value: unknown): CheckResult {
         }
         if (!isComponentType(entry.type)) {
             return { problem: `component ${name} has the unknown type "${shownName(asText(entry.type))}"` }
+        }
+        // Only a version 2 entry can get this far with an image or a tag.
+        if (Object.hasOwn(entry, 'image')) {
+            const p: string | null = imageProblem(entry.image)
+            if (p !== null) {
+                return { problem: `the image of ${name} ${p}` }
+            }
+        }
+        if (Object.hasOwn(entry, 'tag')) {
+            const p: string | null = tagProblem(entry.tag)
+            if (p !== null) {
+                return { problem: `the tag of ${name} ${p}` }
+            }
         }
     }
     for (const name of names) {
@@ -163,22 +194,30 @@ export function checkDocument(value: unknown): CheckResult {
 
     // Every name has passed NAME_PATTERN, so none of them is __proto__ and
     // assigning into a fresh {} makes each one an own key. Every type has
-    // already passed isComponentType in the first loop over the names.
+    // already passed isComponentType in the first loop over the names, and every
+    // image and tag present has passed its rule. The keys go in the order type,
+    // image, tag, and a missing image or tag stays missing.
     const freshComponents: AfDocument['components'] = {}
     const freshLayout: Record<string, AfPosition> = {}
     for (const name of names) {
         const entry: Record<string, unknown> = components[name] as Record<string, unknown>
         const position: Record<string, unknown> = layout[name] as Record<string, unknown>
-        freshComponents[name] = { type: entry.type as ComponentType }
+        const component: AfComponent = { type: entry.type as ComponentType }
+        if (Object.hasOwn(entry, 'image')) {
+            component.image = entry.image as string
+        }
+        if (Object.hasOwn(entry, 'tag')) {
+            component.tag = entry.tag as string
+        }
+        freshComponents[name] = component
         // Adding 0 turns -0 into 0.
         freshLayout[name] = { x: (position.x as number) + 0, y: (position.y as number) + 0 }
     }
-    return {
-        doc: {
-            schemaVersion: SCHEMA_VERSION,
-            components: freshComponents,
-            connections: lines,
-            layout: freshLayout
-        }
+    const doc: AfDocument = {
+        schemaVersion: SCHEMA_VERSION,
+        components: freshComponents,
+        connections: lines,
+        layout: freshLayout
     }
+    return version === 1 ? { doc, upgradedFrom: 1 } : { doc }
 }

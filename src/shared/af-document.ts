@@ -5,7 +5,7 @@
 import { canSend } from './catalogue'
 import type { ComponentType } from './catalogue'
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export const GRID_SIZE = 20
 
@@ -24,8 +24,12 @@ export interface AfPosition {
     y: number
 }
 
+// image and tag are the only structured deploy settings. The SKILL.md and the
+// extra files live in the component folder, never in the .af (D-05, D-21).
 export interface AfComponent {
     type: ComponentType
+    image?: string
+    tag?: string
 }
 
 export interface AfConnection {
@@ -35,7 +39,7 @@ export interface AfConnection {
 
 // Components and layout are keyed by component name. The name is the identity.
 export interface AfDocument {
-    schemaVersion: 1
+    schemaVersion: 2
     components: Record<string, AfComponent>
     connections: AfConnection[]
     layout: Record<string, AfPosition>
