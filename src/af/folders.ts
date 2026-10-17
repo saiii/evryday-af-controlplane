@@ -546,6 +546,15 @@ async function runSave(dataDir: string, request: SaveRequest, afText: string): P
             let origin: string | null = null
             if (from !== null) {
                 if (sameDesign) {
+                    // A rename whose source folder is gone, onto a name that
+                    // has a folder, is a repeat of a save that already did the
+                    // rename (a second click, or a retry after a lost answer).
+                    // Taking it as a new component would remove that folder.
+                    if (from !== c && !existing.has(from) && existing.has(c)) {
+                        throw new SaveRefusedError(
+                            `the folder of ${from} is not there any more, so ${c} cannot be renamed from it; open ${name}.af again`
+                        )
+                    }
                     origin = rootReal !== null && existing.has(from) ? path.join(rootReal, from) : null
                 } else if (sourceReal !== null) {
                     origin = await resolveComponent(sourceReal, from)

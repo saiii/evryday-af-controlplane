@@ -98,6 +98,13 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
     // a newer one, and a list closed meanwhile shows nothing.
     const listRequest = useRef<number>(0)
     const openRequest = useRef<number>(0)
+    // True while a save request is on its way. A second Save (a double-click,
+    // or Enter then Save) would send the same from names again after the first
+    // has already moved the folders, and an Open would reset the staging the
+    // save answer then overwrites, so both wait for the answer. The ref is
+    // read in handlers; the state only disables the button.
+    const savingRef = useRef<boolean>(false)
+    const [saving, setSaving] = useState<boolean>(false)
 
     // Closes the list and drops any list answer still on its way.
     const closeList = () => {
@@ -108,6 +115,9 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
     // Writes the canvas as <name>.af, over a file of the same name with no
     // question (D-03). A missing or bad name is refused here and nothing is sent.
     const save = async () => {
+        if (savingRef.current) {
+            return
+        }
         closeList()
         if (name === '') {
             showMessage(`Cannot save without a name: ${FILE_NAME_RULE}.`, 'error')
@@ -135,6 +145,24 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
             showMessage(`Cannot save ${saved}.af: the canvas and its files are larger than ${MAX_SAVE_BODY_TEXT}.`, 'error')
             return
         }
+        savingRef.current = true
+        setSaving(true)
+        try {
+            await sendSave(saved, nodes, nameById, body)
+        } finally {
+            savingRef.current = false
+            setSaving(false)
+        }
+    }
+
+    // Sends the save and shows its answer. Only save() calls it, with the
+    // in-flight guard set.
+    const sendSave = async (
+        saved: string,
+        nodes: ComponentFlowNode[],
+        nameById: ReadonlyMap<string, string>,
+        body: string
+    ) => {
         let response: Response
         try {
             response = await fetch(`/api/systems/${encodeURIComponent(saved)}`, {
@@ -216,6 +244,10 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
     // leaves the canvas and the name field as they were (D-18).
     const open = async (picked: string) => {
         closeList()
+        if (savingRef.current) {
+            showMessage(`Cannot open ${picked}.af while a save is still running; try again when it is done.`, 'error')
+            return
+        }
         openRequest.current += 1
         const request: number = openRequest.current
         let response: Response
@@ -342,7 +374,7 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
                 onChange={(event) => setName(event.target.value)}
                 onKeyDown={onNameKeyDown}
             />
-            <button type="button" onClick={() => void save()}>
+            <button type="button" disabled={saving} onClick={() => void save()}>
                 Save
             </button>
             <button type="button" aria-expanded={listOpen} onClick={() => void toggleList()}>
