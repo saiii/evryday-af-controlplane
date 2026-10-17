@@ -34,6 +34,81 @@ body {
     padding: 12px;
 }
 
+.shell-with-panel {
+    grid-template-columns: 220px 1fr 360px;
+}
+
+.shell-panel {
+    background: #f3f4f6;
+    border-left: 1px solid #d1d5db;
+    padding: 12px;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.settings-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.settings-name {
+    font-weight: 600;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+
+.settings-type {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.settings-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.settings-label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.settings-input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: 13px;
+    color: #111827;
+    background: #ffffff;
+    border: 1px solid #6b7280;
+    border-radius: 3px;
+    outline: none;
+}
+
+.settings-input-bad {
+    border-color: #dc2626;
+}
+
+.settings-note-error {
+    color: #dc2626;
+    font-size: 12px;
+}
+
+.settings-note-warning {
+    color: #b45309;
+    font-size: 12px;
+}
+
+.settings-hint {
+    color: #6b7280;
+    font-size: 12px;
+}
+
 .shell-canvas {
     background: #ffffff;
     position: relative;
