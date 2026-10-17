@@ -4,7 +4,7 @@
 
 import type { Edge, Node } from '@xyflow/react'
 import { SCHEMA_VERSION } from '../../src/shared/af-document'
-import type { AfConnection, AfDocument, AfPosition } from '../../src/shared/af-document'
+import type { AfComponent, AfConnection, AfDocument, AfPosition } from '../../src/shared/af-document'
 import type { ComponentType } from '../../src/shared/catalogue'
 import { facingSides } from '../../src/shared/line-path'
 
@@ -12,8 +12,10 @@ import { facingSides } from '../../src/shared/line-path'
 export const NODE_WIDTH = 180
 export const NODE_HEIGHT = 60
 
-// componentType is the kebab id, never the label.
-export type ComponentNodeData = { name: string; componentType: ComponentType }
+// componentType is the kebab id, never the label. image and tag are the only
+// structured settings of a component (D-05); a new component has neither, so
+// no registry or default image is ever made up here (D-06).
+export type ComponentNodeData = { name: string; componentType: ComponentType; image?: string; tag?: string }
 
 export type ComponentFlowNode = Node<ComponentNodeData, 'component'>
 
@@ -31,17 +33,26 @@ export function newNodeId(): string {
 }
 
 // The caller passes the id, so that ids are not created inside a state updater.
+// image and tag are copied only when they are non-empty text.
 export function componentNode(
     id: string,
     componentType: ComponentType,
     name: string,
-    position: AfPosition
+    position: AfPosition,
+    settings?: { image?: string; tag?: string }
 ): ComponentFlowNode {
+    const data: ComponentNodeData = { name, componentType }
+    if (typeof settings?.image === 'string' && settings.image !== '') {
+        data.image = settings.image
+    }
+    if (typeof settings?.tag === 'string' && settings.tag !== '') {
+        data.tag = settings.tag
+    }
     return {
         id,
         type: 'component',
         position: { x: position.x, y: position.y },
-        data: { name, componentType }
+        data
     }
 }
 
@@ -71,8 +82,9 @@ export function connectionsFromEdges(
     return connections
 }
 
-// The name, the type, the position and the lines are copied. No internal id
-// and no handle side goes into the document.
+// The name, the type, the image and tag when set, the position and the lines
+// are copied. An empty image or tag is left out (D-19). No internal id and no
+// handle side goes into the document.
 export function documentFromNodes(
     nodes: readonly ComponentFlowNode[],
     edges: readonly LineFlowEdge[]
@@ -84,7 +96,14 @@ export function documentFromNodes(
         layout: {}
     }
     for (const node of nodes) {
-        doc.components[node.data.name] = { type: node.data.componentType }
+        const component: AfComponent = { type: node.data.componentType }
+        if (typeof node.data.image === 'string' && node.data.image !== '') {
+            component.image = node.data.image
+        }
+        if (typeof node.data.tag === 'string' && node.data.tag !== '') {
+            component.tag = node.data.tag
+        }
+        doc.components[node.data.name] = component
         doc.layout[node.data.name] = {
             x: Math.round(node.position.x),
             y: Math.round(node.position.y)
@@ -101,7 +120,11 @@ export function nodesFromDocument(doc: AfDocument): { nodes: ComponentFlowNode[]
     const nodes: ComponentFlowNode[] = Object.keys(doc.components).map((name) => {
         const id: string = newNodeId()
         idByName.set(name, id)
-        return componentNode(id, doc.components[name].type, name, doc.layout[name])
+        const component: AfComponent = doc.components[name]
+        return componentNode(id, component.type, name, doc.layout[name], {
+            image: component.image,
+            tag: component.tag
+        })
     })
     return { nodes, idByName }
 }
