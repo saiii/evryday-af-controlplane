@@ -185,8 +185,9 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
             const removed: string[] = isStringArray(a.removed) ? a.removed : []
             const renamed: { from: string; to: string }[] = renamedFrom(a.renamed)
             // The saved names are now the origins and the saved design the
-            // source; staged edits are written, so they are cleared. If another
-            // design was opened meanwhile, its staging is left alone.
+            // source; staged edits that were sent are written, so they are
+            // cleared, and edits made while the save ran stay staged. If
+            // another design was opened meanwhile, its staging is left alone.
             folders.afterSave(saved, nameById, ticket)
             const missing: number = nodes.filter(
                 (n) => typeof n.data.image !== 'string' || n.data.image === '' || typeof n.data.tag !== 'string' || n.data.tag === ''

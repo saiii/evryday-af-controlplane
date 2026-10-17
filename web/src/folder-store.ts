@@ -41,8 +41,15 @@ export type Envelope = {
 }
 
 // What a save was built from. afterSave takes it back, so the answer of a
-// save that was overtaken by an Open changes nothing.
-export type SaveTicket = { generation: number }
+// save that was overtaken by an Open changes nothing, and an edit staged
+// while the save was on its way is kept. sent holds the staged objects that
+// went into the request (each edit stores a new object); ids are the
+// entries that existed when it was built.
+export type SaveTicket = {
+    generation: number
+    ids: ReadonlySet<string>
+    sent: ReadonlyMap<string, { skill: FolderEntry['skill']; files: ReadonlyMap<string, StagedFile> }>
+}
 
 export interface FolderStore {
     // Changes on every store change, for re-rendering.
@@ -298,6 +305,7 @@ export function useFolderStore(): FolderStore {
         // Plain object keyed by canvas names; those already pass NAME_PATTERN
         // on the canvas, so __proto__ cannot occur. The server re-checks.
         const components: Envelope['components'] = {}
+        const sent: Map<string, { skill: FolderEntry['skill']; files: ReadonlyMap<string, StagedFile> }> = new Map()
         for (const node of nodes) {
             const name: string = node.data.name
             const current: FolderEntry | undefined = entries.current.get(node.id)
@@ -308,6 +316,7 @@ export function useFolderStore(): FolderStore {
                 count += 1
             }
             if (current !== undefined) {
+                sent.set(node.id, { skill: current.skill, files: new Map(current.files) })
                 for (const [path, staged] of current.files) {
                     if (staged.kind === 'text') {
                         files[path] = { text: staged.text }
@@ -325,7 +334,7 @@ export function useFolderStore(): FolderStore {
         if (source.current !== null) {
             envelope.source = source.current
         }
-        return { envelope, ticket: { generation: generation.current } }
+        return { envelope, ticket: { generation: generation.current, ids: new Set(entries.current.keys()), sent } }
     }, [])
 
     const firstProblem = useCallback((nodes: readonly ComponentFlowNode[]): string | null => {
@@ -348,7 +357,29 @@ export function useFolderStore(): FolderStore {
             source.current = design
             const next: Map<string, FolderEntry> = new Map()
             for (const [id, name] of nameById) {
-                next.set(id, freshEntry(name))
+                const fresh: FolderEntry = freshEntry(name)
+                // Edits staged after the request was built were not written,
+                // so they stay staged on top of the saved folder (WR-01).
+                const current: FolderEntry | undefined = entries.current.get(id)
+                const was = ticket.sent.get(id)
+                if (current !== undefined) {
+                    if (current.skill !== null && current.skill !== was?.skill) {
+                        fresh.skill = current.skill
+                    }
+                    for (const [path, staged] of current.files) {
+                        if (was?.files.get(path) !== staged) {
+                            fresh.files.set(path, staged)
+                        }
+                    }
+                }
+                next.set(id, fresh)
+            }
+            // A component added to the canvas while the save was on its way
+            // keeps its entry (origin null, with anything staged).
+            for (const [id, current] of entries.current) {
+                if (!nameById.has(id) && !ticket.ids.has(id)) {
+                    next.set(id, current)
+                }
             }
             entries.current = next
             generation.current += 1
