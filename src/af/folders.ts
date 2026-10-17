@@ -9,8 +9,9 @@
 // through a link, is refused.
 
 import { randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import type { Dirent, Stats } from 'node:fs'
-import { cp, lstat, mkdir, readdir, realpath, rename, rm, rmdir, stat } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, readdir, realpath, rename, rm, rmdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { byCodeUnit, NAME_PATTERN } from '../shared/af-document'
 import type { AfDocument } from '../shared/af-document'
@@ -487,8 +488,9 @@ export async function drainSaves(): Promise<void> {
 // A step of the undo journal: a rename to undo, or a path to remove.
 type JournalStep = { kind: 'moved'; from: string; to: string } | { kind: 'created'; path: string }
 
-// The plan for one component, made before anything changes.
-type ComponentPlan = { name: string; from: string | null; origin: string | null }
+// The plan for one component, made before anything changes. listed is what
+// checkFinalFolder counted in the origin; a Save-as copies exactly that.
+type ComponentPlan = { name: string; from: string | null; origin: string | null; listed: ListedFile[] }
 
 // Saves the design: the component folders follow the document, the sent
 // files are written, and the .af is written last. Throws SaveRefusedError
@@ -571,8 +573,8 @@ async function runSave(dataDir: string, request: SaveRequest, afText: string): P
                     origin = await resolveComponent(sourceReal, from)
                 }
             }
-            plans.push({ name: c, from: origin === null ? null : from, origin })
-            await checkFinalFolder(c, origin, component.files)
+            const listed: ListedFile[] = await checkFinalFolder(c, origin, component.files)
+            plans.push({ name: c, from: origin === null ? null : from, origin, listed })
         }
         for (const x of [...existing].sort(byCodeUnit)) {
             const kept: boolean = sameDesign && plans.some((p: ComponentPlan) => p.name === x && p.from === x)
@@ -647,14 +649,26 @@ async function runSave(dataDir: string, request: SaveRequest, afText: string): P
                 continue
             }
             if (from !== null && plan.origin !== null) {
-                // Journalled first, so a copy that fails half way is removed.
+                // Only the files the checks counted are copied: no names
+                // starting with '.', no links, no folders too deep, no paths
+                // that break the path rule. The folder is journalled, so a
+                // copy that fails half way is removed with it.
+                await mkdir(target)
                 journal.push({ kind: 'created', path: target })
-                await cp(plan.origin, target, {
-                    recursive: true,
-                    errorOnExist: true,
-                    force: false,
-                    filter: async (src: string): Promise<boolean> => !(await lstat(src)).isSymbolicLink()
-                })
+                for (const file of plan.listed) {
+                    part = `the file ${plan.name}/${file.path}`
+                    const parts: string[] = file.path.split('/')
+                    if (parts.length > 1) {
+                        await mkdir(path.join(target, ...parts.slice(0, -1)), { recursive: true })
+                    }
+                    // Checked again just before, so a file swapped for a link
+                    // since the plan is not followed.
+                    if (!(await lstat(file.full)).isFile()) {
+                        throw new SaveRefusedError(`${request.source}${COMPONENTS_SUFFIX}/${from}/${file.path} changed while saving`)
+                    }
+                    await copyFile(file.full, path.join(target, ...parts), constants.COPYFILE_EXCL)
+                }
+                part = `the folder of ${plan.name}`
                 if (from !== plan.name) {
                     renamed.push({ from, to: plan.name })
                 }
@@ -801,10 +815,13 @@ async function exists(full: string): Promise<boolean> {
 // leave with colliding paths (also with files already on disk, such as
 // readme.md sent where README.md is), too many files or too many bytes, and
 // a sent path that goes through a link in the origin folder.
-async function checkFinalFolder(c: string, origin: string | null, files: Map<string, Buffer | null>): Promise<void> {
+// Returns the files listed in the origin.
+async function checkFinalFolder(c: string, origin: string | null, files: Map<string, Buffer | null>): Promise<ListedFile[]> {
     const sizes: Map<string, number> = new Map()
+    let listed: ListedFile[] = []
     if (origin !== null) {
-        for (const file of (await walkFolder(origin)).files) {
+        listed = (await walkFolder(origin)).files
+        for (const file of listed) {
             sizes.set(file.path, file.size)
         }
         for (const p of files.keys()) {
@@ -837,4 +854,5 @@ async function checkFinalFolder(c: string, origin: string | null, files: Map<str
     if (total > MAX_FOLDER_BYTES) {
         throw new SaveRefusedError(`the folder of ${c} would be larger than ${MAX_FOLDER_SIZE_TEXT}`)
     }
+    return listed
 }
