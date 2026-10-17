@@ -81,11 +81,12 @@ function toBase64(bytes: Uint8Array): string {
     return btoa(binary)
 }
 
-// Text when the bytes are UTF-8 with no NUL byte, otherwise base64.
+// Text when the bytes are UTF-8 with no NUL byte, otherwise base64. A BOM is
+// kept in the text, as on the server, so the stored bytes match the upload.
 function stagedFromBytes(bytes: Uint8Array): StagedFile {
     if (!bytes.includes(0)) {
         try {
-            const text: string = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+            const text: string = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
             return { kind: 'text', text }
         } catch {
             // Not UTF-8: sent as base64.
