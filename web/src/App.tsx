@@ -52,7 +52,7 @@ function Shell({ bar, folders }: { bar: MessageBar; folders: FolderStore }) {
             {selectedId !== null && (
                 <aside className="shell-panel">
                     {/* key: a new selection starts with fresh drafts. */}
-                    <SettingsPanel key={selectedId} nodeId={selectedId} />
+                    <SettingsPanel key={selectedId} nodeId={selectedId} folders={folders} />
                 </aside>
             )}
         </div>

@@ -1,5 +1,7 @@
 // The settings of the one selected component (D-01), shown as a column to the
-// right of the canvas. Image and tag are the only structured settings (D-05).
+// right of the canvas. Image and tag are the only structured settings (D-05);
+// the brief, the SKILL.md and the extra files are staged in the folder store
+// and written only by the header Save (D-02, D-12).
 // The checks here are a courtesy for the person typing: the server checks the
 // same rules again on save (D-03, research Pitfall 28), with the same words,
 // because both use src/shared/component-settings.ts.
@@ -10,6 +12,8 @@ import { useReactFlow, useStore } from '@xyflow/react'
 import { imageProblem, imageWarning, tagProblem, tagWarning } from '../../../src/shared/component-settings'
 import { CATALOGUE } from '../../../src/shared/catalogue'
 import type { ComponentFlowNode, ComponentNodeData, LineFlowEdge } from '../af-mapping'
+import type { FolderStore } from '../folder-store'
+import { SkillBrief, SkillSection } from './SkillSection'
 
 function sentence(fragment: string): string {
     return `${fragment.charAt(0).toUpperCase()}${fragment.slice(1)}.`
@@ -89,7 +93,7 @@ function SettingField({ label, subject, value, problemOf, warningOf, apply, hint
     )
 }
 
-export default function SettingsPanel({ nodeId }: { nodeId: string }) {
+export default function SettingsPanel({ nodeId, folders }: { nodeId: string; folders: FolderStore }) {
     const { updateNodeData } = useReactFlow<ComponentFlowNode, LineFlowEdge>()
     // Only this node's data, so a drag of another component does not re-render.
     const data = useStore((s) => s.nodeLookup.get(nodeId)?.data) as ComponentNodeData | undefined
@@ -106,6 +110,7 @@ export default function SettingsPanel({ nodeId }: { nodeId: string }) {
                 <div className="settings-name">{data.name}</div>
                 <div className="settings-type">{CATALOGUE[data.componentType].label}</div>
             </div>
+            <SkillBrief nodeId={nodeId} folders={folders} />
             <SettingField
                 label="Image"
                 subject="The image"
@@ -123,6 +128,11 @@ export default function SettingsPanel({ nodeId }: { nodeId: string }) {
                 apply={(v) => updateNodeData(nodeId, { tag: v })}
                 hint="A version such as 1.0, or a digest such as sha256:…"
             />
+            <SkillSection nodeId={nodeId} name={data.name} folders={folders} />
+            <div className="settings-note-muted">
+                Deleting this component removes its folder when you save. Only your own git or backups can bring it
+                back.
+            </div>
         </div>
     )
 }

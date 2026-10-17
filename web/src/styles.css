@@ -356,3 +356,61 @@ body {
     font-size: 13px;
     color: #6b7280;
 }
+
+.settings-brief {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    background: #e5e7eb;
+    border-radius: 4px;
+}
+
+.settings-brief-text {
+    font-size: 13px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.settings-skill {
+    width: 100%;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    border: 1px solid #6b7280;
+    border-radius: 3px;
+    resize: vertical;
+}
+
+.settings-skill[readonly] {
+    background: #f9fafb;
+    color: #6b7280;
+}
+
+.settings-note-muted {
+    color: #6b7280;
+    font-size: 12px;
+}
+
+.settings-note-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.settings-button {
+    padding: 2px 8px;
+    font-family: inherit;
+    font-size: 12px;
+    color: #111827;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.settings-button:disabled {
+    color: #9ca3af;
+    cursor: default;
+}
