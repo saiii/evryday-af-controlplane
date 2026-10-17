@@ -13,7 +13,7 @@ import { documentFromNodes, edgesFromDocument, nodesFromDocument } from '../af-m
 import type { ComponentFlowNode, LineFlowEdge } from '../af-mapping'
 import type { ShowMessage } from '../message'
 import { bodyFrom, errorFrom, UNREACHABLE } from '../api'
-import type { FolderStore } from '../folder-store'
+import type { Envelope, FolderStore, SaveTicket } from '../folder-store'
 import { MAX_SAVE_BODY_BYTES, MAX_SAVE_BODY_TEXT, textByteLength } from '../../../src/shared/component-settings'
 
 // The names in a list answer, or null when the answer is not { names: string[] }.
@@ -140,7 +140,8 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
         // Built before the request: the names that become the origins on success.
         const nameById: Map<string, string> = new Map(nodes.map((n) => [n.id, n.data.name]))
         // One request carries the canvas and every staged folder edit (D-02, D-14).
-        const body: string = JSON.stringify({ document: doc, ...folders.buildEnvelope(nodes) })
+        const built: { envelope: Envelope; ticket: SaveTicket } = folders.buildEnvelope(nodes)
+        const body: string = JSON.stringify({ document: doc, ...built.envelope })
         if (textByteLength(body) > MAX_SAVE_BODY_BYTES) {
             showMessage(`Cannot save ${saved}.af: the canvas and its files are larger than ${MAX_SAVE_BODY_TEXT}.`, 'error')
             return
@@ -148,7 +149,7 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
         savingRef.current = true
         setSaving(true)
         try {
-            await sendSave(saved, nodes, nameById, body)
+            await sendSave(saved, nodes, nameById, body, built.ticket)
         } finally {
             savingRef.current = false
             setSaving(false)
@@ -161,7 +162,8 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
         saved: string,
         nodes: ComponentFlowNode[],
         nameById: ReadonlyMap<string, string>,
-        body: string
+        body: string,
+        ticket: SaveTicket
     ) => {
         let response: Response
         try {
@@ -183,8 +185,9 @@ export default function FileBar({ showMessage, folders }: FileBarProps) {
             const removed: string[] = isStringArray(a.removed) ? a.removed : []
             const renamed: { from: string; to: string }[] = renamedFrom(a.renamed)
             // The saved names are now the origins and the saved design the
-            // source; staged edits are written, so they are cleared.
-            folders.afterSave(saved, nameById)
+            // source; staged edits are written, so they are cleared. If another
+            // design was opened meanwhile, its staging is left alone.
+            folders.afterSave(saved, nameById, ticket)
             const missing: number = nodes.filter(
                 (n) => typeof n.data.image !== 'string' || n.data.image === '' || typeof n.data.tag !== 'string' || n.data.tag === ''
             ).length

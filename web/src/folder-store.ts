@@ -40,6 +40,10 @@ export type Envelope = {
     components: Record<string, { from: string | null; files?: Record<string, EnvelopeFile> }>
 }
 
+// What a save was built from. afterSave takes it back, so the answer of a
+// save that was overtaken by an Open changes nothing.
+export type SaveTicket = { generation: number }
+
 export interface FolderStore {
     // Changes on every store change, for re-rendering.
     version: number
@@ -52,9 +56,11 @@ export interface FolderStore {
     stageFile(id: string, path: string, staged: StagedFile): void
     unstageFile(id: string, path: string): void
     resetForOpen(design: string, idByName: ReadonlyMap<string, string>): void
-    buildEnvelope(nodes: readonly ComponentFlowNode[]): Envelope
+    buildEnvelope(nodes: readonly ComponentFlowNode[]): { envelope: Envelope; ticket: SaveTicket }
     firstProblem(nodes: readonly ComponentFlowNode[]): string | null
-    afterSave(design: string, nameById: ReadonlyMap<string, string>): void
+    // Returns false, and changes nothing, when the store was reset after the
+    // envelope was built.
+    afterSave(design: string, nameById: ReadonlyMap<string, string>, ticket: SaveTicket): boolean
 }
 
 const EMPTY_FOLDER: LoadedFolder = {
@@ -288,7 +294,7 @@ export function useFolderStore(): FolderStore {
         [touch]
     )
 
-    const buildEnvelope = useCallback((nodes: readonly ComponentFlowNode[]): Envelope => {
+    const buildEnvelope = useCallback((nodes: readonly ComponentFlowNode[]): { envelope: Envelope; ticket: SaveTicket } => {
         // Plain object keyed by canvas names; those already pass NAME_PATTERN
         // on the canvas, so __proto__ cannot occur. The server re-checks.
         const components: Envelope['components'] = {}
@@ -319,7 +325,7 @@ export function useFolderStore(): FolderStore {
         if (source.current !== null) {
             envelope.source = source.current
         }
-        return envelope
+        return { envelope, ticket: { generation: generation.current } }
     }, [])
 
     const firstProblem = useCallback((nodes: readonly ComponentFlowNode[]): string | null => {
@@ -333,7 +339,12 @@ export function useFolderStore(): FolderStore {
     }, [])
 
     const afterSave = useCallback(
-        (design: string, nameById: ReadonlyMap<string, string>) => {
+        (design: string, nameById: ReadonlyMap<string, string>, ticket: SaveTicket): boolean => {
+            // An Open (or another save) since the envelope was built: the
+            // entries now belong to that design and must not be replaced.
+            if (generation.current !== ticket.generation) {
+                return false
+            }
             source.current = design
             const next: Map<string, FolderEntry> = new Map()
             for (const [id, name] of nameById) {
@@ -342,6 +353,7 @@ export function useFolderStore(): FolderStore {
             entries.current = next
             generation.current += 1
             touch()
+            return true
         },
         [touch]
     )
