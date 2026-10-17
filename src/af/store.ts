@@ -1,6 +1,7 @@
-// The only code that touches the data directory: list the saved files, read
-// one, and write one atomically. It knows nothing about HTTP; the caller turns
-// a null or a thrown error into an answer.
+// The low-level code that touches the data directory: list the saved files,
+// the guarded read of one file and the atomic write of one file. folders.ts
+// builds the component folder logic on these. It knows nothing about HTTP;
+// the caller turns a null or a thrown error into an answer.
 
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
@@ -9,13 +10,13 @@ import type { Dirent, Stats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { byCodeUnit, NAME_PATTERN } from '../shared/af-document'
+import { MAX_FILE_BYTES, MAX_FILE_SIZE_TEXT } from '../shared/component-settings'
 
-// A file larger than this is refused on open before it is read, and a save
-// that would write a larger file is refused, so every saved file opens again.
-export const MAX_FILE_BYTES: number = 1024 * 1024
-
-// MAX_FILE_BYTES as it reads in a sentence, such as "1 MB".
-export const MAX_FILE_SIZE_TEXT: string = `${MAX_FILE_BYTES / (1024 * 1024)} MB`
+// A file larger than MAX_FILE_BYTES is refused on open before it is read, and
+// a save that would write a larger file is refused, so every saved file opens
+// again. The limits live in the shared rules; they are re-exported here so the
+// routes keep importing them from the store.
+export { MAX_FILE_BYTES, MAX_FILE_SIZE_TEXT }
 
 export class FileTooLargeError extends Error {
     constructor(file: string) {
@@ -51,13 +52,12 @@ export async function listNames(dir: string): Promise<string[]> {
         .sort(byCodeUnit)
 }
 
-// The text of <name>.af, or null when there is no such regular file (missing,
+// The bytes of a file, or null when there is no such regular file (missing,
 // a symlink or a directory). The file is opened once with O_NOFOLLOW, and the
 // check and the read go through that one handle, so a file swapped for a link
-// after the check can never be read. Throws FileTooLargeError above
-// MAX_FILE_BYTES, also when the file grows after the size check.
-export async function readText(dir: string, name: string): Promise<string | null> {
-    const file: string = fileFor(dir, name)
+// after the check can never be read. Throws FileTooLargeError above limit,
+// also when the file grows after the size check.
+export async function readBytes(file: string, limit: number): Promise<Buffer | null> {
     let handle: FileHandle
     try {
         handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
@@ -73,12 +73,12 @@ export async function readText(dir: string, name: string): Promise<string | null
         if (!info.isFile()) {
             return null
         }
-        if (info.size > MAX_FILE_BYTES) {
+        if (info.size > limit) {
             throw new FileTooLargeError(file)
         }
         // Reads at most one byte more than the limit, so a file that grew
         // after the stat is still refused.
-        const buffer: Buffer = Buffer.alloc(MAX_FILE_BYTES + 1)
+        const buffer: Buffer = Buffer.alloc(limit + 1)
         let length: number = 0
         while (length < buffer.length) {
             const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
@@ -87,26 +87,33 @@ export async function readText(dir: string, name: string): Promise<string | null
             }
             length += bytesRead
         }
-        if (length > MAX_FILE_BYTES) {
+        if (length > limit) {
             throw new FileTooLargeError(file)
         }
-        return buffer.toString('utf8', 0, length)
+        return buffer.subarray(0, length)
     } finally {
         await handle.close()
     }
 }
 
-// Writes <name>.af through a temp file in the same directory, then renames it
-// over the target. rename replaces a symlink itself, never its target, and a
+// The text of <name>.af, or null when there is no such regular file. Throws
+// FileTooLargeError above MAX_FILE_BYTES (see readBytes).
+export async function readText(dir: string, name: string): Promise<string | null> {
+    const bytes: Buffer | null = await readBytes(fileFor(dir, name), MAX_FILE_BYTES)
+    return bytes === null ? null : bytes.toString('utf8')
+}
+
+// Writes a file through a temp file in the same folder, then renames it over
+// the target. rename replaces a symlink itself, never its target, and a
 // failure never leaves a half-written file (D-17). The temp file begins with
 // '.', so it is never listed, and it is removed when anything fails.
-export async function writeAtomic(dir: string, name: string, text: string): Promise<void> {
-    const file: string = fileFor(dir, name)
-    const temp: string = path.join(path.resolve(dir), `.${name}.af.${process.pid}.${randomUUID()}.tmp`)
+export async function writeAtomicAt(file: string, data: string | Buffer): Promise<void> {
+    const dir: string = path.dirname(file)
+    const temp: string = path.join(dir, `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`)
     try {
         const handle: FileHandle = await open(temp, 'wx', 0o644)
         try {
-            await handle.writeFile(text, 'utf8')
+            await handle.writeFile(data)
             await handle.sync()
         } finally {
             await handle.close()
@@ -119,10 +126,16 @@ export async function writeAtomic(dir: string, name: string, text: string): Prom
     await syncFolder(dir)
 }
 
+// Writes <name>.af atomically. The temp name .<name>.af.<pid>.<uuid>.tmp is
+// the one TEMP_PATTERN matches.
+export async function writeAtomic(dir: string, name: string, text: string): Promise<void> {
+    await writeAtomicAt(fileFor(dir, name), text)
+}
+
 // Syncs the directory, so the rename survives a power loss. The file is
 // already in place by then, so a failed sync is logged and the save still
 // counts as done.
-async function syncFolder(dir: string): Promise<void> {
+export async function syncFolder(dir: string): Promise<void> {
     let handle: FileHandle | undefined
     try {
         handle = await open(path.resolve(dir), constants.O_RDONLY)

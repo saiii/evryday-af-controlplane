@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { Server } from 'http'
 import path from 'path'
 import { apiErrors, apiNotFound, localOnly, systemsRouter } from './api/systems'
+import { findLeftoverSaves } from './af/folders'
 import { removeStaleTemps } from './af/store'
 
 const service: string = "evryday-af-controlplane"
@@ -29,6 +30,19 @@ removeStaleTemps(dataDir).then(
     },
     (error: unknown) => {
         console.warn(`Cannot look for left-over temp files in ${dataDir}:`, error)
+    }
+)
+
+// The undo folder of a save that was cut off may hold the only copy of a
+// removed component folder, so it is only logged at start, never deleted.
+findLeftoverSaves(dataDir).then(
+    (paths: string[]) => {
+        for (const p of paths) {
+            console.warn(`A save was interrupted: ${p} may hold the only copy of a removed component folder, so it is kept`)
+        }
+    },
+    (error: unknown) => {
+        console.warn(`Cannot look for left-over saves in ${dataDir}:`, error)
     }
 )
 
