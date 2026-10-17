@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { Server } from 'http'
 import path from 'path'
 import { apiErrors, apiNotFound, localOnly, systemsRouter } from './api/systems'
-import { findLeftoverSaves } from './af/folders'
+import { drainSaves, findLeftoverSaves } from './af/folders'
 import { removeStaleTemps } from './af/store'
 
 const service: string = "evryday-af-controlplane"
@@ -78,13 +78,25 @@ const shutdown = (signal: string): void => {
     }
     shuttingDown = true
     console.log(`Received ${signal}; shutting down`)
-    server.close(() => {
-        process.exit(0)
+    // No new connections; idle keep-alive ones are closed at once.
+    server.close()
+    server.closeIdleConnections()
+    // A save that has begun to move folders must finish (or roll back) before
+    // the process ends, else component folders stay in the undo folder while
+    // the old .af still names them. Its answer is still sent when it can be.
+    void drainSaves().finally(() => {
+        // A moment for the last answer to leave before the sockets close.
+        setTimeout(() => {
+            server.closeAllConnections()
+            process.exit(0)
+        }, 100)
     })
-    // Idle and keep-alive connections must not hold the server open.
-    server.closeAllConnections()
-    // A stuck connection still cannot hold the exit past 2 seconds.
-    setTimeout(() => process.exit(0), 2000).unref()
+    // A stuck save cannot hold the exit forever; this stays under the
+    // 10-second grace period of podman and docker stop.
+    setTimeout(() => {
+        console.error('A save did not finish within 8 seconds; exiting anyway')
+        process.exit(1)
+    }, 8000).unref()
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'))

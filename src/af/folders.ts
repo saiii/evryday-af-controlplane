@@ -473,6 +473,17 @@ function withSaveLock<T>(work: () => Promise<T>): Promise<T> {
     return run
 }
 
+// Resolves when no save is running or queued, so shutdown can wait for a save
+// that is between its first change and the .af write. A save queued while
+// waiting is waited for too.
+export async function drainSaves(): Promise<void> {
+    let seen: Promise<unknown>
+    do {
+        seen = saveChain
+        await seen
+    } while (seen !== saveChain)
+}
+
 // A step of the undo journal: a rename to undo, or a path to remove.
 type JournalStep = { kind: 'moved'; from: string; to: string } | { kind: 'created'; path: string }
 
