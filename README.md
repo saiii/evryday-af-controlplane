@@ -54,13 +54,15 @@ A line from A to B means that A is allowed to send messages to B. Lines are perm
 
 ## The .af format
 
-A saved file such as `my-system.af` looks like this:
+A saved file such as `my-design.af` looks like this:
 
 ```yaml
-schemaVersion: 1
+schemaVersion: 2
 components:
   agent-1:
     type: agent
+    image: registry.example.com/team/agent
+    tag: "1.0"
   flow-router-1:
     type: flow-router
 connections:
@@ -73,10 +75,36 @@ layout:
   flow-router-1: { x: 100, y: 120 }
 ```
 
-- `schemaVersion: 1` comes first.
+- `schemaVersion: 2` comes first.
 - Components are keyed by name; there are no generated ids.
+- `image` and `tag` are the only settings kept in the file. The tag is always written in double quotes, so a tag such as `1.0` or `010` stays text. An empty image or tag is left out.
+- The controlplane only checks the image and tag as text. It never pulls an image or reads anything from inside one.
+- A version 1 file written by v1.1 still opens; it is shown as version 2 and saved as version 2. Opening never rewrites a file.
 - Positions are in `layout`, one per component.
 - The designer always writes this standard form: keys in this order, names sorted, lines sorted by `from` then `to`, one position per line. Opening a file and saving it unchanged gives the same bytes.
 - Comments and other formatting in a hand-edited file are not kept when it is saved again.
 - The connection rules are not checked when a file is opened, so a hand-edited line the table above forbids still opens.
 - Names such as `no`, `on` and `y` are allowed. A YAML 1.1 reader would read them as booleans.
+
+## Component folders
+
+Each component has a folder `<design>.components/<component>/` next to `<design>.af` in the data folder, for example `my-design.components/agent-1/`.
+
+- The folder holds a `SKILL.md` in the Agent Skills format (frontmatter with `name` and `description`, then Markdown) and optional extra files.
+- The `description` is shown as the brief in the settings panel.
+- A new component gets a starter `SKILL.md` when the design is saved. Opening a design writes nothing.
+- Save renames and removes folders so they follow the components on the canvas. A removed folder can only be got back from your own git or backups.
+- The controlplane runs no git. Keep the `.af`, the `SKILL.md` files and the extra files in your own repo.
+- Limits: 1 MB per file, 5 MB and 100 files per folder, 8 MB per save.
+- A file path is 1 to 4 parts joined by `/`, each part made of letters, digits, `_`, `.` and `-`, not starting with `.`. Paths that differ only in letter case are refused, because the disk may not tell them apart.
+- Files and folders whose names start with `.` (such as `.git`) are not shown or changed.
+
+### Keeping the files in another repo
+
+To keep a design's files in another repo, bind-mount that repo's folder at `data/<design>.components`, for example with an extra `-v` on `podman run`:
+
+```sh
+podman run -v ./data:/data -v ~/src/my-skills:/data/my-design.components ...
+```
+
+Do not use a symlink to a host path instead: it does not resolve inside the container. Links below `<design>.components` are not followed.
