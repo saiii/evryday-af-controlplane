@@ -8,20 +8,29 @@
 // a listing skips links, and a component folder that is a link, or a write
 // through a link, is refused.
 
+import { randomUUID } from 'node:crypto'
 import type { Dirent, Stats } from 'node:fs'
-import { lstat, readdir, realpath, stat } from 'node:fs/promises'
+import { cp, lstat, mkdir, readdir, realpath, rename, rm, rmdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { byCodeUnit, NAME_PATTERN } from '../shared/af-document'
+import type { AfDocument } from '../shared/af-document'
+import { checkDocument, isMapping, shownName } from '../shared/af-validate'
+import type { CheckResult } from '../shared/af-validate'
 import {
     filePathProblem,
     MAX_FILE_BYTES,
+    MAX_FILE_SIZE_TEXT,
     MAX_FOLDER_BYTES,
     MAX_FOLDER_FILES,
+    MAX_FOLDER_SIZE_TEXT,
     MAX_PATH_PARTS,
-    SKILL_FILE
+    pathsProblem,
+    SKILL_FILE,
+    starterSkill
 } from '../shared/component-settings'
-import { checkSkill } from './skill'
-import { FileTooLargeError, readBytes } from './store'
+import { checkSkill, syncNameLine } from './skill'
+import type { SkillCheck } from './skill'
+import { FileTooLargeError, readBytes, syncFolder, writeAtomic, writeAtomicAt } from './store'
 
 // A refusal that depends on what is on disk. problem is a lower-case fragment
 // with no full stop; the route says `Cannot save ${name}.af: ${problem}.`
@@ -285,4 +294,527 @@ export async function findLeftoverSaves(dataDir: string): Promise<string[]> {
         }
     }
     return found.sort(byCodeUnit)
+}
+
+// What one component of a save request asks for. from is the folder the
+// component's files come from (in the source design), or null for a new
+// component. files maps a path to its new bytes, or to null to remove it.
+export type SaveComponent = { from: string | null; files: Map<string, Buffer | null> }
+
+// A checked save request. Every component of the document has an entry.
+// Maps, never plain objects, hold anything keyed by request text.
+export type SaveRequest = {
+    name: string
+    source: string
+    doc: AfDocument
+    components: Map<string, SaveComponent>
+    warnings: string[]
+}
+
+export type SaveResult = { warnings: string[]; removed: string[]; renamed: { from: string; to: string }[] }
+
+const ENVELOPE_KEYS: readonly string[] = ['document', 'source', 'components']
+const COMPONENT_ENTRY_KEYS: readonly string[] = ['from', 'files']
+
+// A key or path from the request as it is shown in a problem.
+function shown(text: string): string {
+    return `"${shownName(text)}"`
+}
+
+function ownKeys(v: Record<string, unknown>): string[] {
+    return Object.keys(v).sort(byCodeUnit)
+}
+
+// Checks the whole save request without touching the disk, and builds the
+// request the transaction runs. The first problem found wins; each is a
+// lower-case fragment with no full stop (`Cannot save ${name}.af: …`).
+export function checkSaveEnvelope(body: unknown, name: string): { request: SaveRequest } | { problem: string } {
+    if (!isMapping(body)) {
+        return { problem: 'the request is not a mapping with a document' }
+    }
+    for (const key of ownKeys(body)) {
+        if (!ENVELOPE_KEYS.includes(key)) {
+            return { problem: `the request has the key ${shown(key)}, which is not allowed` }
+        }
+    }
+    if (!Object.hasOwn(body, 'document')) {
+        return { problem: 'the request has no document' }
+    }
+    // A save takes only the current schemaVersion (SET-07).
+    const checked: CheckResult = checkDocument(body.document, [2])
+    if ('problem' in checked) {
+        return { problem: checked.problem }
+    }
+    const doc: AfDocument = checked.doc
+
+    let source: string = name
+    if (Object.hasOwn(body, 'source')) {
+        if (typeof body.source !== 'string' || !NAME_PATTERN.test(body.source)) {
+            return { problem: 'the source design must be a plain name' }
+        }
+        source = body.source
+    }
+
+    const warnings: string[] = []
+    const components: Map<string, SaveComponent> = new Map()
+    const sent: unknown = Object.hasOwn(body, 'components') ? body.components : {}
+    if (!isMapping(sent)) {
+        return { problem: 'components must be a mapping from component name to its files' }
+    }
+    for (const c of ownKeys(sent)) {
+        if (!NAME_PATTERN.test(c) || !Object.hasOwn(doc.components, c)) {
+            return { problem: `components names ${shown(c)}, which is not in the document` }
+        }
+        const entry: unknown = sent[c]
+        if (!isMapping(entry)) {
+            return { problem: `the entry of ${c} in components must be a mapping with from and files` }
+        }
+        for (const key of ownKeys(entry)) {
+            if (!COMPONENT_ENTRY_KEYS.includes(key)) {
+                return { problem: `the entry of ${c} has the key ${shown(key)}, which is not allowed` }
+            }
+        }
+        let from: string | null = c
+        if (Object.hasOwn(entry, 'from')) {
+            if (entry.from === null) {
+                from = null
+            } else if (typeof entry.from === 'string' && NAME_PATTERN.test(entry.from)) {
+                from = entry.from
+            } else {
+                return { problem: `the from of ${c} must be a plain name or null` }
+            }
+        }
+        const files: Map<string, Buffer | null> = new Map()
+        const sentFiles: unknown = Object.hasOwn(entry, 'files') ? entry.files : {}
+        if (!isMapping(sentFiles)) {
+            return { problem: `the files of ${c} must be a mapping from path to content` }
+        }
+        for (const p of ownKeys(sentFiles)) {
+            const pathProblem: string | null = filePathProblem(p)
+            if (pathProblem !== null) {
+                return { problem: `the path ${shown(p)} of ${c} ${pathProblem}` }
+            }
+            const file: string = `${c}/${p}`
+            const content: unknown = sentFiles[p]
+            if (content === null) {
+                if (p === SKILL_FILE) {
+                    return { problem: `${file} cannot be removed` }
+                }
+                files.set(p, null)
+                continue
+            }
+            if (!isMapping(content) || ownKeys(content).length !== 1) {
+                return { problem: `${file} must be given as text or as base64` }
+            }
+            let bytes: Buffer
+            if (Object.hasOwn(content, 'text') && typeof content.text === 'string') {
+                bytes = Buffer.from(content.text, 'utf8')
+            } else if (Object.hasOwn(content, 'base64') && typeof content.base64 === 'string') {
+                if (p === SKILL_FILE) {
+                    return { problem: `${file} must be sent as text` }
+                }
+                bytes = Buffer.from(content.base64, 'base64')
+                // Strict: Node skips characters it cannot read, so only a
+                // string that encodes back to itself is taken.
+                if (bytes.toString('base64') !== content.base64) {
+                    return { problem: `${file} is not valid base64` }
+                }
+            } else {
+                return { problem: `${file} must be given as text or as base64` }
+            }
+            if (bytes.length > MAX_FILE_BYTES) {
+                return { problem: `${file} is larger than ${MAX_FILE_SIZE_TEXT}` }
+            }
+            if (p === SKILL_FILE) {
+                const skill: SkillCheck = checkSkill(content.text as string, c)
+                if (skill.problem !== null) {
+                    return { problem: skill.problem }
+                }
+                warnings.push(...skill.warnings)
+            }
+            files.set(p, bytes)
+        }
+        // Removals count too: on a case-insensitive disk, removing readme.md
+        // would remove README.md.
+        const pathsIssue: string | null = pathsProblem([...files.keys()])
+        if (pathsIssue !== null) {
+            return { problem: `in the folder of ${c}, ${pathsIssue}` }
+        }
+        components.set(c, { from, files })
+    }
+    // A component the request does not name keeps the folder of its own name.
+    for (const c of ownKeys(doc.components)) {
+        if (!components.has(c)) {
+            components.set(c, { from: c, files: new Map() })
+        }
+    }
+    const byFrom: Map<string, string> = new Map()
+    for (const c of [...components.keys()].sort(byCodeUnit)) {
+        const from: string | null = (components.get(c) as SaveComponent).from
+        if (from === null) {
+            continue
+        }
+        const first: string | undefined = byFrom.get(from)
+        if (first !== undefined) {
+            return { problem: `${first} and ${c} both come from the folder of ${from}` }
+        }
+        byFrom.set(from, c)
+    }
+    return { request: { name, source, doc, components, warnings } }
+}
+
+// One save at a time per server: a promise chain. Saves are short, and this
+// also covers a Save-as reading another design's folders.
+let saveChain: Promise<unknown> = Promise.resolve()
+
+function withSaveLock<T>(work: () => Promise<T>): Promise<T> {
+    const run: Promise<T> = saveChain.then(work, work)
+    saveChain = run.catch(() => undefined)
+    return run
+}
+
+// A step of the undo journal: a rename to undo, or a path to remove.
+type JournalStep = { kind: 'moved'; from: string; to: string } | { kind: 'created'; path: string }
+
+// The plan for one component, made before anything changes.
+type ComponentPlan = { name: string; from: string | null; origin: string | null }
+
+// Saves the design: the component folders follow the document, the sent
+// files are written, and the .af is written last. Throws SaveRefusedError
+// when what is on disk refuses the save (nothing is changed) and
+// SaveFailedError when a step failed (everything is rolled back).
+export function saveDesign(dataDir: string, request: SaveRequest, afText: string): Promise<SaveResult> {
+    return withSaveLock(() => runSave(dataDir, request, afText))
+}
+
+async function runSave(dataDir: string, request: SaveRequest, afText: string): Promise<SaveResult> {
+    const name: string = request.name
+    const nothingChanged: string = `Cannot save ${name}.af: the folder ${name}${COMPONENTS_SUFFIX} cannot be read. Nothing was changed.`
+    const warnings: string[] = [...request.warnings]
+    const renamed: { from: string; to: string }[] = []
+
+    // Step 1: the root. It may be a link or a mount; it is resolved once and
+    // never renamed or removed. A missing root is made in step 3.
+    const root: string = componentsDir(dataDir, name)
+    let rootReal: string | null = null
+    let sourceReal: string | null = null
+    const existing: Set<string> = new Set()
+    const plans: ComponentPlan[] = []
+    const moveAside: string[] = []
+    let sameDesign: boolean = request.source === name
+    try {
+        try {
+            rootReal = await realpath(root)
+        } catch (error) {
+            if (errorCode(error) !== 'ENOENT') {
+                throw error
+            }
+        }
+        if (rootReal !== null && !(await stat(rootReal)).isDirectory()) {
+            throw new SaveRefusedError(`${name}${COMPONENTS_SUFFIX} is not a folder`)
+        }
+        if (!sameDesign) {
+            try {
+                const real: string = await realpath(componentsDir(dataDir, request.source))
+                if ((await stat(real)).isDirectory()) {
+                    sourceReal = real
+                }
+            } catch (error) {
+                if (errorCode(error) !== 'ENOENT') {
+                    throw error
+                }
+            }
+            if (sourceReal !== null && sourceReal === rootReal) {
+                sameDesign = true
+            }
+        }
+
+        // Step 2: plan, touching nothing. Entries that are not plain names
+        // (such as .git or a left-over undo folder) are never touched.
+        if (rootReal !== null) {
+            const entries: Dirent[] = await readdir(rootReal, { withFileTypes: true })
+            for (const entry of entries) {
+                if (NAME_PATTERN.test(entry.name)) {
+                    await resolveComponent(rootReal, entry.name)
+                    existing.add(entry.name)
+                }
+            }
+        }
+        for (const c of [...request.components.keys()].sort(byCodeUnit)) {
+            const component: SaveComponent = request.components.get(c) as SaveComponent
+            const from: string | null = component.from
+            let origin: string | null = null
+            if (from !== null) {
+                if (sameDesign) {
+                    origin = rootReal !== null && existing.has(from) ? path.join(rootReal, from) : null
+                } else if (sourceReal !== null) {
+                    origin = await resolveComponent(sourceReal, from)
+                }
+            }
+            plans.push({ name: c, from: origin === null ? null : from, origin })
+            await checkFinalFolder(c, origin, component.files)
+        }
+        for (const x of [...existing].sort(byCodeUnit)) {
+            const kept: boolean = sameDesign && plans.some((p: ComponentPlan) => p.name === x && p.from === x)
+            if (!kept) {
+                moveAside.push(x)
+            }
+        }
+    } catch (error) {
+        if (error instanceof SaveRefusedError) {
+            throw error
+        }
+        console.error(`Cannot save ${name}.af: the folder ${root} cannot be read:`, error)
+        throw new SaveFailedError(nothingChanged)
+    }
+
+    // Step 3: the undo folder and the journal.
+    const journal: JournalStep[] = []
+    let part: string = `the folder ${name}${COMPONENTS_SUFFIX}`
+    let rootMade: string | null = null
+    let undo: string | null = null
+    const undoName: string = `.af-save-${randomUUID()}`
+    let fileCount: number = 0
+    try {
+        if (rootReal === null) {
+            await mkdir(root)
+            rootMade = root
+            rootReal = await realpath(root)
+        }
+        const base: string = rootReal
+        await mkdir(path.join(base, undoName))
+        undo = path.join(base, undoName)
+        await mkdir(path.join(undo, 'old'))
+        await mkdir(path.join(undo, 'files'))
+        const undoDir: string = undo
+        // Every file moved aside gets its own undo path, so a later move can
+        // never replace an earlier original.
+        const moveFileAside = async (full: string): Promise<void> => {
+            fileCount += 1
+            const to: string = path.join(undoDir, 'files', String(fileCount))
+            await rename(full, to)
+            journal.push({ kind: 'moved', from: full, to })
+        }
+
+        // Step 4: move aside every leaving folder, so swaps and chains work.
+        for (const x of moveAside) {
+            part = `the folder of ${x}`
+            const to: string = path.join(undoDir, 'old', x)
+            await rename(path.join(base, x), to)
+            journal.push({ kind: 'moved', from: path.join(base, x), to })
+        }
+
+        // Step 5: place each component's folder.
+        for (const plan of plans) {
+            part = `the folder of ${plan.name}`
+            const target: string = path.join(base, plan.name)
+            const from: string | null = plan.from
+            if (sameDesign) {
+                if (from !== null && from === plan.name && !moveAside.includes(from)) {
+                    continue
+                }
+                if (from !== null && moveAside.includes(from)) {
+                    const aside: string = path.join(undoDir, 'old', from)
+                    await rename(aside, target)
+                    journal.push({ kind: 'moved', from: aside, to: target })
+                    if (from !== plan.name) {
+                        renamed.push({ from, to: plan.name })
+                    }
+                    continue
+                }
+                await mkdir(target)
+                journal.push({ kind: 'created', path: target })
+                continue
+            }
+            if (from !== null && plan.origin !== null) {
+                // Journalled first, so a copy that fails half way is removed.
+                journal.push({ kind: 'created', path: target })
+                await cp(plan.origin, target, {
+                    recursive: true,
+                    errorOnExist: true,
+                    force: false,
+                    filter: async (src: string): Promise<boolean> => !(await lstat(src)).isSymbolicLink()
+                })
+                if (from !== plan.name) {
+                    renamed.push({ from, to: plan.name })
+                }
+                continue
+            }
+            await mkdir(target)
+            journal.push({ kind: 'created', path: target })
+        }
+
+        // Step 6: edit the sent files.
+        for (const plan of plans) {
+            const dir: string = path.join(base, plan.name)
+            const files: Map<string, Buffer | null> = (request.components.get(plan.name) as SaveComponent).files
+            for (const p of [...files.keys()].sort(byCodeUnit)) {
+                part = `the file ${plan.name}/${p}`
+                const full: string = await guardedFile(dir, p, plan.name)
+                if (await exists(full)) {
+                    await moveFileAside(full)
+                }
+                const bytes: Buffer | null = files.get(p) as Buffer | null
+                if (bytes === null) {
+                    continue
+                }
+                const parts: string[] = p.split('/')
+                for (let i = 1; i < parts.length; i += 1) {
+                    const sub: string = path.join(dir, ...parts.slice(0, i))
+                    try {
+                        await mkdir(sub)
+                        journal.push({ kind: 'created', path: sub })
+                    } catch (error) {
+                        if (errorCode(error) !== 'EEXIST') {
+                            throw error
+                        }
+                    }
+                }
+                await writeAtomicAt(full, bytes)
+                journal.push({ kind: 'created', path: full })
+            }
+        }
+
+        // Step 7: starters, then the name line of each renamed SKILL.md.
+        for (const plan of plans) {
+            part = `the file ${plan.name}/${SKILL_FILE}`
+            const skill: string = path.join(base, plan.name, SKILL_FILE)
+            if (!(await exists(skill))) {
+                await writeAtomicAt(skill, starterSkill(plan.name))
+                journal.push({ kind: 'created', path: skill })
+            }
+        }
+        for (const pair of renamed) {
+            part = `the file ${pair.to}/${SKILL_FILE}`
+            const skill: string = path.join(base, pair.to, SKILL_FILE)
+            let bytes: Buffer | null = null
+            try {
+                bytes = await readBytes(skill, MAX_FILE_BYTES)
+            } catch (error) {
+                if (!(error instanceof FileTooLargeError)) {
+                    throw error
+                }
+            }
+            const text: string | null = bytes === null ? null : asText(bytes)
+            const synced: { text: string; changed: boolean } | null =
+                text === null ? null : syncNameLine(text, pair.from, pair.to)
+            if (synced !== null && synced.changed) {
+                await moveFileAside(skill)
+                await writeAtomicAt(skill, synced.text)
+                journal.push({ kind: 'created', path: skill })
+                continue
+            }
+            const check: SkillCheck | null = text === null ? null : checkSkill(text, pair.to)
+            const file: string = `${pair.to}/${SKILL_FILE}`
+            if (
+                check === null ||
+                check.warnings.some((w: string) => w.startsWith(`the name in ${file}`) || w === `${file} has no name`)
+            ) {
+                warnings.push(`the name in ${file} was not changed to ${pair.to}; change it by hand`)
+            }
+        }
+        await syncFolder(base)
+
+        // Step 8: the .af, last of all.
+        part = 'the data folder'
+        await writeAtomic(dataDir, name, afText)
+    } catch (error) {
+        console.error(`Cannot save ${name}.af: ${part} failed; rolling back:`, error)
+        let rolledBack: boolean = true
+        for (const step of [...journal].reverse()) {
+            try {
+                if (step.kind === 'moved') {
+                    await rename(step.to, step.from)
+                } else {
+                    await rm(step.path, { recursive: true, force: true })
+                }
+            } catch (undoError) {
+                rolledBack = false
+                console.error(`Cannot undo a step of the save of ${name}.af:`, step, undoError)
+            }
+        }
+        if (rolledBack) {
+            if (undo !== null) {
+                await rm(undo, { recursive: true, force: true }).catch((rmError: unknown) => {
+                    console.warn(`Cannot remove the undo folder ${undo}:`, rmError)
+                })
+            }
+            if (rootMade !== null) {
+                // rmdir removes only an empty folder, and only one this save made.
+                await rmdir(rootMade).catch((rmError: unknown) => {
+                    console.warn(`Cannot remove the folder ${rootMade}:`, rmError)
+                })
+            }
+            if (error instanceof SaveRefusedError) {
+                throw error
+            }
+            throw new SaveFailedError(`Cannot save ${name}.af: ${part} cannot be written. Nothing was changed.`)
+        }
+        console.error(`The undo folder ${undo} is kept; it may hold the only copy of a component folder`)
+        throw new SaveFailedError(
+            `Cannot save ${name}.af: ${part} cannot be written, and some files may be left in ${name}${COMPONENTS_SUFFIX}/${undoName}.`
+        )
+    }
+
+    // Step 9: done. What is still in undo/old was removed by this save.
+    const removed: string[] = (await readdir(path.join(undo, 'old'))).sort(byCodeUnit)
+    await rm(undo, { recursive: true, force: true }).catch((error: unknown) => {
+        console.warn(`Saved ${name}.af, but cannot remove the undo folder ${undo}:`, error)
+    })
+    return { warnings, removed, renamed }
+}
+
+// True when something is at the path (lstat, so a link counts as itself).
+async function exists(full: string): Promise<boolean> {
+    try {
+        await lstat(full)
+        return true
+    } catch (error) {
+        if (errorCode(error) === 'ENOENT') {
+            return false
+        }
+        throw error
+    }
+}
+
+// Refuses, before anything changes, a component folder that the save would
+// leave with colliding paths (also with files already on disk, such as
+// readme.md sent where README.md is), too many files or too many bytes, and
+// a sent path that goes through a link in the origin folder.
+async function checkFinalFolder(c: string, origin: string | null, files: Map<string, Buffer | null>): Promise<void> {
+    const sizes: Map<string, number> = new Map()
+    if (origin !== null) {
+        for (const file of (await walkFolder(origin)).files) {
+            sizes.set(file.path, file.size)
+        }
+        for (const p of files.keys()) {
+            await guardedFile(origin, p, c)
+        }
+    }
+    if (!sizes.has(SKILL_FILE)) {
+        sizes.set(SKILL_FILE, Buffer.byteLength(starterSkill(c), 'utf8'))
+    }
+    const removals: string[] = []
+    for (const [p, bytes] of files) {
+        if (bytes === null) {
+            sizes.delete(p)
+            removals.push(p)
+        } else {
+            sizes.set(p, bytes.length)
+        }
+    }
+    const problem: string | null = pathsProblem([...sizes.keys(), ...removals])
+    if (problem !== null) {
+        throw new SaveRefusedError(`in the folder of ${c}, ${problem}`)
+    }
+    if (sizes.size > MAX_FOLDER_FILES) {
+        throw new SaveRefusedError(`the folder of ${c} would have more than ${MAX_FOLDER_FILES} files`)
+    }
+    let total: number = 0
+    for (const size of sizes.values()) {
+        total += size
+    }
+    if (total > MAX_FOLDER_BYTES) {
+        throw new SaveRefusedError(`the folder of ${c} would be larger than ${MAX_FOLDER_SIZE_TEXT}`)
+    }
 }
