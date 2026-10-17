@@ -685,6 +685,7 @@ async function runSave(dataDir: string, request: SaveRequest, afText: string): P
             for (const p of [...files.keys()].sort(byCodeUnit)) {
                 part = `the file ${plan.name}/${p}`
                 const full: string = await guardedFile(dir, p, plan.name)
+                await notAFolder(full, plan.name, p)
                 if (await exists(full)) {
                     await moveFileAside(full)
                 }
@@ -811,6 +812,26 @@ async function exists(full: string): Promise<boolean> {
     }
 }
 
+// Refuses a sent path that names a folder (or anything not a regular file) on
+// disk: moving it aside would remove the whole folder, with files the listing
+// never showed.
+async function notAFolder(full: string, c: string, p: string): Promise<void> {
+    let info: Stats
+    try {
+        info = await lstat(full)
+    } catch (error) {
+        if (errorCode(error) === 'ENOENT') {
+            return
+        }
+        throw error
+    }
+    if (!info.isFile()) {
+        throw new SaveRefusedError(
+            info.isDirectory() ? `${c}/${p} is a folder on disk, not a file` : `${c}/${p} is not a regular file on disk`
+        )
+    }
+}
+
 // Refuses, before anything changes, a component folder that the save would
 // leave with colliding paths (also with files already on disk, such as
 // readme.md sent where README.md is), too many files or too many bytes, and
@@ -844,7 +865,7 @@ async function checkFinalFolder(
             }
         }
         for (const p of files.keys()) {
-            await guardedFile(origin, p, c)
+            await notAFolder(await guardedFile(origin, p, c), c, p)
         }
     }
     if (!sizes.has(SKILL_FILE)) {
