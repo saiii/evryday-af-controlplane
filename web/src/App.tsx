@@ -4,21 +4,25 @@ import FileBar from './components/FileBar'
 import Palette from './components/Palette'
 import SettingsPanel from './components/SettingsPanel'
 import { useMessageBar } from './message'
+import { useFolderStore } from './folder-store'
+import type { FolderStore } from './folder-store'
 
 type MessageBar = ReturnType<typeof useMessageBar>
 
 export default function App() {
     // One bar for every message: line refusals from the canvas and file messages.
     const bar: MessageBar = useMessageBar()
+    // The staged component folder edits; only the header Save writes them.
+    const folders: FolderStore = useFolderStore()
     return (
         <ReactFlowProvider>
-            <Shell bar={bar} />
+            <Shell bar={bar} folders={folders} />
         </ReactFlowProvider>
     )
 }
 
 // Inside the provider, because the selection is read from the canvas store.
-function Shell({ bar }: { bar: MessageBar }) {
+function Shell({ bar, folders }: { bar: MessageBar; folders: FolderStore }) {
     const { message, showMessage, clearMessage } = bar
     // The id of the one selected component, or null when none or several are
     // selected (D-01). A primitive, so moving a component does not re-render.
@@ -37,7 +41,7 @@ function Shell({ bar }: { bar: MessageBar }) {
         <div className={selectedId === null ? 'shell' : 'shell shell-with-panel'}>
             <header className="shell-header">
                 <span className="shell-title">Agent Flow Designer</span>
-                <FileBar showMessage={showMessage} />
+                <FileBar showMessage={showMessage} folders={folders} />
             </header>
             <aside className="shell-palette">
                 <Palette />

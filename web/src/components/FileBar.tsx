@@ -12,30 +12,9 @@ import type { CheckResult } from '../../../src/shared/af-validate'
 import { documentFromNodes, edgesFromDocument, nodesFromDocument } from '../af-mapping'
 import type { ComponentFlowNode, LineFlowEdge } from '../af-mapping'
 import type { ShowMessage } from '../message'
-
-const UNREACHABLE: string = 'Cannot reach the server.'
-
-// The sentence in the body of a refusal, or the fallback when the body has none.
-async function errorFrom(response: Response, fallback: string): Promise<string> {
-    try {
-        const body: unknown = await response.json()
-        if (typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string') {
-            return body.error
-        }
-    } catch {
-        // Not JSON: the fallback is used.
-    }
-    return fallback
-}
-
-// The body of a successful answer, or undefined when it is not JSON.
-async function bodyFrom(response: Response): Promise<unknown> {
-    try {
-        return (await response.json()) as unknown
-    } catch {
-        return undefined
-    }
-}
+import { bodyFrom, errorFrom, UNREACHABLE } from '../api'
+import type { FolderStore } from '../folder-store'
+import { MAX_SAVE_BODY_BYTES, MAX_SAVE_BODY_TEXT, textByteLength } from '../../../src/shared/component-settings'
 
 // The names in a list answer, or null when the answer is not { names: string[] }.
 function namesFrom(body: unknown): string[] | null {
@@ -48,9 +27,65 @@ function namesFrom(body: unknown): string[] | null {
 
 interface FileBarProps {
     showMessage: ShowMessage
+    folders: FolderStore
 }
 
-export default function FileBar({ showMessage }: FileBarProps) {
+function isStringArray(value: unknown): value is string[] {
+    return Array.isArray(value) && value.every((v) => typeof v === 'string')
+}
+
+// The renamed list of a save answer, or [] when it is not { from, to }[].
+function renamedFrom(value: unknown): { from: string; to: string }[] {
+    if (!Array.isArray(value)) {
+        return []
+    }
+    const pairs: { from: string; to: string }[] = []
+    for (const v of value as unknown[]) {
+        if (typeof v !== 'object' || v === null) {
+            return []
+        }
+        const pair = v as Record<string, unknown>
+        if (typeof pair.from !== 'string' || typeof pair.to !== 'string') {
+            return []
+        }
+        pairs.push({ from: pair.from, to: pair.to })
+    }
+    return pairs
+}
+
+// The message after a save: the Phase 5 wording when nothing else is to be
+// said, else the folders that moved or went (D-18), the components still
+// without image or tag (D-07) and the first server warning.
+function savedMessage(
+    saved: string,
+    renamed: readonly { from: string; to: string }[],
+    removed: readonly string[],
+    missing: number,
+    warnings: readonly string[]
+): string {
+    const parts: string[] = []
+    if (renamed.length > 0) {
+        parts.push(`Renamed the folder of ${renamed.map((r) => `${r.from} to ${r.to}`).join(', ')}.`)
+    }
+    if (removed.length === 1) {
+        parts.push(`Removed the folder of ${removed[0]}. Only your own git or backups can bring it back.`)
+    } else if (removed.length > 1) {
+        parts.push(`Removed the folders of ${removed.join(', ')}. Only your own git or backups can bring them back.`)
+    }
+    if (missing === 1) {
+        parts.push('1 component has no image or tag yet.')
+    } else if (missing > 1) {
+        parts.push(`${missing} components have no image or tag yet.`)
+    }
+    if (warnings.length > 0) {
+        const more: number = warnings.length - 1
+        const first: string = warnings[0].replace(/\.$/, '')
+        parts.push(`Note: ${first}${more > 0 ? ` (and ${more} more)` : ''}.`)
+    }
+    return parts.length === 0 ? `Saved ${saved}.af` : `Saved ${saved}.af. ${parts.join(' ')}`
+}
+
+export default function FileBar({ showMessage, folders }: FileBarProps) {
     const { getNodes, getEdges, setNodes, setEdges, fitView } = useReactFlow<ComponentFlowNode, LineFlowEdge>()
     // Starts empty (D-02); judged exactly as typed, never trimmed or lower-cased.
     const [name, setName] = useState<string>('')
@@ -83,13 +118,29 @@ export default function FileBar({ showMessage }: FileBarProps) {
             return
         }
         const saved: string = name
-        const doc: AfDocument = documentFromNodes(getNodes(), getEdges())
+        const nodes: ComponentFlowNode[] = getNodes()
+        // A SKILL.md the panel has found not valid stops the save here with the
+        // sentence the server would give; the server refuses it anyway (D-03).
+        const problem: string | null = folders.firstProblem(nodes)
+        if (problem !== null) {
+            showMessage(`Cannot save ${saved}.af: ${problem}.`, 'error')
+            return
+        }
+        const doc: AfDocument = documentFromNodes(nodes, getEdges())
+        // Built before the request: the names that become the origins on success.
+        const nameById: Map<string, string> = new Map(nodes.map((n) => [n.id, n.data.name]))
+        // One request carries the canvas and every staged folder edit (D-02, D-14).
+        const body: string = JSON.stringify({ document: doc, ...folders.buildEnvelope(nodes) })
+        if (textByteLength(body) > MAX_SAVE_BODY_BYTES) {
+            showMessage(`Cannot save ${saved}.af: the canvas and its files are larger than ${MAX_SAVE_BODY_TEXT}.`, 'error')
+            return
+        }
         let response: Response
         try {
             response = await fetch(`/api/systems/${encodeURIComponent(saved)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(doc),
+                body,
                 cache: 'no-store'
             })
         } catch {
@@ -97,9 +148,22 @@ export default function FileBar({ showMessage }: FileBarProps) {
             return
         }
         if (response.ok) {
-            showMessage(`Saved ${saved}.af`, 'info')
+            const answer: unknown = await bodyFrom(response)
+            const a: Record<string, unknown> =
+                typeof answer === 'object' && answer !== null ? (answer as Record<string, unknown>) : {}
+            const warnings: string[] = isStringArray(a.warnings) ? a.warnings : []
+            const removed: string[] = isStringArray(a.removed) ? a.removed : []
+            const renamed: { from: string; to: string }[] = renamedFrom(a.renamed)
+            // The saved names are now the origins and the saved design the
+            // source; staged edits are written, so they are cleared.
+            folders.afterSave(saved, nameById)
+            const missing: number = nodes.filter(
+                (n) => typeof n.data.image !== 'string' || n.data.image === '' || typeof n.data.tag !== 'string' || n.data.tag === ''
+            ).length
+            showMessage(savedMessage(saved, renamed, removed, missing, warnings), 'info')
             return
         }
+        // A refused or failed save leaves the staging as it was.
         showMessage(
             await errorFrom(response, `Cannot save ${saved}.af: the server answered ${response.status}.`),
             'error'
@@ -190,8 +254,14 @@ export default function FileBar({ showMessage }: FileBarProps) {
         const edges: LineFlowEdge[] = edgesFromDocument(checked.doc, idByName)
         setNodes(nodes)
         setEdges(edges)
+        // Every component's origin is now its name in the opened design.
+        folders.resetForOpen(picked, idByName)
         setName(picked)
-        showMessage(`Opened ${picked}.af`, 'info')
+        // A version 1 file is upgraded in memory only; the next save writes v2 (D-20).
+        const upgraded: boolean =
+            typeof body === 'object' && body !== null && Object.hasOwn(body, 'upgradedFrom') &&
+            (body as { upgradedFrom?: unknown }).upgradedFrom === 1
+        showMessage(upgraded ? `Opened ${picked}.af (version 1; it is saved as version 2)` : `Opened ${picked}.af`, 'info')
         // Zoom and pan are not in the file; the view is fitted instead (A6). The
         // library waits until the new components are measured before it fits.
         void fitView({ maxZoom: 1, padding: 0.2 })
