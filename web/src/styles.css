@@ -414,3 +414,42 @@ body {
     color: #9ca3af;
     cursor: default;
 }
+
+.settings-files {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.settings-file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.settings-file-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+}
+
+.settings-path {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, monospace;
+}
+
+.settings-add {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}

@@ -14,6 +14,7 @@ import { CATALOGUE } from '../../../src/shared/catalogue'
 import type { ComponentFlowNode, ComponentNodeData, LineFlowEdge } from '../af-mapping'
 import type { FolderStore } from '../folder-store'
 import { SkillBrief, SkillSection } from './SkillSection'
+import FilesSection from './FilesSection'
 
 function sentence(fragment: string): string {
     return `${fragment.charAt(0).toUpperCase()}${fragment.slice(1)}.`
@@ -129,6 +130,7 @@ export default function SettingsPanel({ nodeId, folders }: { nodeId: string; fol
                 hint="A version such as 1.0, or a digest such as sha256:…"
             />
             <SkillSection nodeId={nodeId} name={data.name} folders={folders} />
+            <FilesSection nodeId={nodeId} name={data.name} folders={folders} />
             <div className="settings-note-muted">
                 Deleting this component removes its folder when you save. Only your own git or backups can bring it
                 back.
