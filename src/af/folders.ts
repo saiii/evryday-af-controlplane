@@ -573,7 +573,7 @@ async function runSave(dataDir: string, request: SaveRequest, afText: string): P
                     origin = await resolveComponent(sourceReal, from)
                 }
             }
-            const listed: ListedFile[] = await checkFinalFolder(c, origin, component.files)
+            const listed: ListedFile[] = await checkFinalFolder(c, origin, !sameDesign, component.files)
             plans.push({ name: c, from: origin === null ? null : from, origin, listed })
         }
         for (const x of [...existing].sort(byCodeUnit)) {
@@ -815,14 +815,33 @@ async function exists(full: string): Promise<boolean> {
 // leave with colliding paths (also with files already on disk, such as
 // readme.md sent where README.md is), too many files or too many bytes, and
 // a sent path that goes through a link in the origin folder.
+// A folder of this design that the save keeps (or renames) with no file sent
+// passes as it is: files the panel cannot show (too large, past the limits)
+// must not block every save of the design. A folder already past a limit may
+// still be edited as long as the edit does not make it larger on that count.
+// copied is true for a Save-as, where the origin is copied into a new folder.
 // Returns the files listed in the origin.
-async function checkFinalFolder(c: string, origin: string | null, files: Map<string, Buffer | null>): Promise<ListedFile[]> {
+async function checkFinalFolder(
+    c: string,
+    origin: string | null,
+    copied: boolean,
+    files: Map<string, Buffer | null>
+): Promise<ListedFile[]> {
     const sizes: Map<string, number> = new Map()
     let listed: ListedFile[] = []
+    let countBefore: number = 0
+    let bytesBefore: number = 0
     if (origin !== null) {
         listed = (await walkFolder(origin)).files
+        if (!copied && files.size === 0) {
+            return listed
+        }
         for (const file of listed) {
             sizes.set(file.path, file.size)
+            if (!copied) {
+                countBefore += 1
+                bytesBefore += file.size
+            }
         }
         for (const p of files.keys()) {
             await guardedFile(origin, p, c)
@@ -844,14 +863,14 @@ async function checkFinalFolder(c: string, origin: string | null, files: Map<str
     if (problem !== null) {
         throw new SaveRefusedError(`in the folder of ${c}, ${problem}`)
     }
-    if (sizes.size > MAX_FOLDER_FILES) {
+    if (sizes.size > MAX_FOLDER_FILES && sizes.size > countBefore) {
         throw new SaveRefusedError(`the folder of ${c} would have more than ${MAX_FOLDER_FILES} files`)
     }
     let total: number = 0
     for (const size of sizes.values()) {
         total += size
     }
-    if (total > MAX_FOLDER_BYTES) {
+    if (total > MAX_FOLDER_BYTES && total > bytesBefore) {
         throw new SaveRefusedError(`the folder of ${c} would be larger than ${MAX_FOLDER_SIZE_TEXT}`)
     }
     return listed
